@@ -6,7 +6,7 @@ This project combines three previous projects from ZJU-FAST-Lab: ego-planner, El
   - yolo topic (default: `/yolov5trt/bboxes_pub`)
   - local map topic (default: `/drone_0_ego_planner_node/grid_map/occupancy_inflate`)
 - Legacy simulator/CUDA packages are isolated with `CATKIN_IGNORE` and are not built in default Docker workflow.
-- `scripts/stop_*.sh` are lightweight wrappers now; heavy stop logic is implemented in `tools/stop_task_helper.py`.
+- `scripts/stop_*.sh` are lightweight wrappers now; heavy stop logic is implemented in `utils/stop_task_helper.py`.
 
 # 2. Standard Compilation
 **System used to test**: Ubuntu 20.04 with ros-noetic  

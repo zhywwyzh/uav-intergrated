@@ -11,7 +11,7 @@ echo ""
 
 TRACK_PID_FILE="$TMP_DIR/track_real.pid"
 TRACK_BRIDGE_PID_FILE="$TMP_DIR/track_topic_bridge.pid"
-TRACK_BRIDGE_SCRIPT="$PROJECT_ROOT/tools/track_topic_bridge.py"
+TRACK_BRIDGE_SCRIPT="$PROJECT_ROOT/utils/track_topic_bridge.py"
 
 cleanup() {
     echo ""

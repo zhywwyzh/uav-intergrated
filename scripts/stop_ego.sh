@@ -14,6 +14,6 @@ if [ -f "$PROJECT_ROOT/ego-planner/devel/setup.sh" ]; then
     source "$PROJECT_ROOT/ego-planner/devel/setup.sh"
 fi
 
-python3 "$PROJECT_ROOT/tools/stop_task_helper.py" \
+python3 "$PROJECT_ROOT/utils/stop_task_helper.py" \
     --mode ego \
     --tmp-dir "$TMP_DIR"

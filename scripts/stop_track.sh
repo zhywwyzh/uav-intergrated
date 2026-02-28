@@ -14,6 +14,6 @@ if [ -f "$PROJECT_ROOT/Elastic-Tracker/devel/setup.sh" ]; then
     source "$PROJECT_ROOT/Elastic-Tracker/devel/setup.sh"
 fi
 
-python3 "$PROJECT_ROOT/tools/stop_task_helper.py" \
+python3 "$PROJECT_ROOT/utils/stop_task_helper.py" \
     --mode track \
     --tmp-dir "$TMP_DIR"
