@@ -1,0 +1,11 @@
+<launch>
+  <arg name="yolo_topic" default="/yolov5trt/bboxes_pub"/>
+  <arg name="odom_topic" default="/ekf/ekf_odom"/>
+
+  <node name="target_ekf_node" pkg="target_ekf" type="target_ekf_node" output="screen" >
+    <rosparam command="load" file="$(find target_ekf)/config/camera.yaml" />
+    <param name="pitch_thr" value="37"/>
+    <remap from="~yolo" to="$(arg yolo_topic)"/>
+    <remap from="~odom" to="$(arg odom_topic)"/>
+  </node>
+</launch>

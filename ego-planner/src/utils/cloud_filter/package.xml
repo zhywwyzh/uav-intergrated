@@ -1,0 +1,42 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>cloud_filter</name>
+  <version>0.0.1</version>
+  <description>
+    Cloud filter package with point cloud filtering, timestamp conversion, and goal conversion nodes.
+  </description>
+
+  <maintainer email="your_email@example.com">Your Name</maintainer>
+  <license>BSD</license>
+
+  <!-- 依赖声明 -->
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <!-- 构建依赖 -->
+  <build_depend>roscpp</build_depend>
+  <build_depend>sensor_msgs</build_depend>
+  <build_depend>nav_msgs</build_depend>
+  <build_depend>pcl_ros</build_depend>
+  <build_depend>pcl_conversions</build_depend>
+  <build_depend>message_filters</build_depend>
+  <build_depend>geometry_msgs</build_depend>
+  <build_depend>quadrotor_msgs</build_depend>
+  <build_depend>tf</build_depend>
+
+  <!-- 运行依赖 -->
+  <exec_depend>roscpp</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>pcl_ros</exec_depend>
+  <exec_depend>pcl_conversions</exec_depend>
+  <exec_depend>message_filters</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>quadrotor_msgs</exec_depend>
+  <exec_depend>tf</exec_depend>
+
+  <!-- 系统依赖 -->
+  <depend>eigen</depend>
+
+  <export>
+  </export>
+</package>

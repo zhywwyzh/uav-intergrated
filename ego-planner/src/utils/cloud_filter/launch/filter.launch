@@ -1,0 +1,11 @@
+<launch>
+    <!-- 时间戳转换节点 -->
+    <node pkg="cloud_filter" type="timestamp_converter_node" name="timestamp_converter_node" output="screen" />
+
+    <!-- 点云滤波节点 -->
+    <node pkg="cloud_filter" type="pointcloud_filter_node" name="pointcloud_filter_node" output="screen">
+        <param name="filter_radius" value="0.5" />
+        <param name="ror_radius" value="0.2" /> 
+        <param name="ror_min_neighbors" value="5" />
+    </node>
+</launch>

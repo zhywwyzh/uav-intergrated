@@ -1,0 +1,46 @@
+<launch>
+  <arg name="odom_topic" default="/ekf/ekf_odom"/>
+  <arg name="yolo_topic" default="/yolov5trt/bboxes_pub"/>
+  <arg name="global_map_topic" default="/drone_0_ego_planner_node/grid_map/occupancy_inflate"/>
+  <arg name="map_x_length" default="80.0"/>
+  <arg name="map_y_length" default="80.0"/>
+  <arg name="map_z_length" default="8.0"/>
+  <arg name="map_resolution" default="0.15"/>
+  <!-- ego local map topic is already inflated; keep additional inflation disabled by default -->
+  <arg name="inflate_size" default="0"/>
+
+  <node pkg="nodelet" type="nodelet" name="manager" args="manager" output="screen">
+    <param name="num_worker_threads" value="16"/>
+  </node>
+
+  <include file="$(find target_ekf)/launch/target_ekf.launch">
+    <arg name="yolo_topic" value="$(arg yolo_topic)"/>
+    <arg name="odom_topic" value="$(arg odom_topic)"/>
+  </include>
+
+  <node pkg="nodelet" type="nodelet" name="mapping" args="load mapping/Nodelet manager" output="screen">
+    <param name="use_global_map" value="true"/>
+    <param name="global_map_continuous_update" value="true"/>
+    <param name="x_length" value="$(arg map_x_length)"/>
+    <param name="y_length" value="$(arg map_y_length)"/>
+    <param name="z_length" value="$(arg map_z_length)"/>
+    <param name="resolution" value="$(arg map_resolution)"/>
+    <param name="inflate_size" value="$(arg inflate_size)"/>
+    <param name="use_mask" value="true"/>
+    <remap from="~global_map" to="$(arg global_map_topic)"/>
+    <remap from="~target" to="/target_ekf_node/target_odom"/>
+    <remap from="~gridmap_inflate" to="gridmap_inflate"/>
+  </node>
+
+  <node name="mapping_vis" pkg="mapping" type="mapping_vis_node">
+    <remap from="~gridmap" to="gridmap"/>
+    <remap from="~gridmap_inflate" to="gridmap_inflate"/>
+  </node>
+
+  <include file="$(find planning)/launch/planning.launch">
+    <arg name="rhosVisibility_" value="10000.0"/>
+    <arg name="rhoTracking_" value="1000.0"/>
+    <arg name="target_name_" value="/target_ekf_node/target_odom"/>
+    <arg name="odom_topic" value="$(arg odom_topic)"/>
+  </include>
+</launch>

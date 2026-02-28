@@ -1,0 +1,253 @@
+<launch>
+    <arg name="odometry_topic"/>
+    <arg name="camera_pose_topic"/>
+    <arg name="depth_topic"/>
+    <arg name="cloud_topic"/>
+    <arg name="cx"/>
+    <arg name="cy"/>
+    <arg name="fx"/>
+    <arg name="fy"/>
+    <arg name="max_vel"/>
+    <arg name="max_acc"/>
+    <arg name="max_jer"/>
+    <arg name="max_sna"/>
+    <!-- <arg name="planning_horizon"/> -->
+    <arg name="point_num"/>
+    <arg name="point0_x"/>
+    <arg name="point0_y"/>
+    <arg name="point0_z"/>
+    <arg name="point1_x"/>
+    <arg name="point1_y"/>
+    <arg name="point1_z"/>
+    <arg name="point2_x"/>
+    <arg name="point2_y"/>
+    <arg name="point2_z"/>
+    <arg name="point3_x"/>
+    <arg name="point3_y"/>
+    <arg name="point3_z"/>
+    <arg name="point4_x"/>
+    <arg name="point4_y"/>
+    <arg name="point4_z"/>
+    <arg name="flight_type"/>
+    <arg name="use_multitopology_trajs"/>
+    <arg name="drone_id"/>
+    <!-- main node -->
+    <!-- <node pkg="ego_planner" name="drone_$(arg drone_id)_ego_planner_node" type="ego_planner_node" output="screen" launch-prefix="valgrind"> -->
+    <node pkg="exploration_manager" name="drone_$(arg drone_id)_ego_planner_node" type="exploration_node" output="screen">
+        <remap from="~odom_world" to="/drone_$(arg drone_id)_$(arg odometry_topic)"/>
+        <remap from="~mandatory_stop" to="/mandatory_stop_to_planner"/>
+        <remap from="~planning/trajectory" to = "/drone_$(arg drone_id)_planning/trajectory"/>
+        <remap from="~planning/data_display" to = "/drone_$(arg drone_id)_planning/data_display"/>
+        <remap from="~planning/yaw_cmd" to = "/drone_$(arg drone_id)_planning/yaw_cmd"/>
+        <remap from="~planning/broadcast_traj_send" to = "/broadcast_traj_from_planner"/>
+        <remap from="~planning/broadcast_traj_recv" to = "/broadcast_traj_to_planner"/>
+        <!-- Old swarm bridge Commit: fa15acfd7fefc5564c2e41578375811606ac7825
+Parents: 05a47a04edc96baa14671878024759b57a05fe14, 0d9152bf677f496dd4af9c0f8862349993aa2c69
+Author: Pupillen <m15351201779@163.com>
+Committer: Pupillen <m15351201779@163.com>
+Date: Thu Aug 08 2024 14:45:55 GMT+0800 -->
+        <remap from="/bridge/Swarm" to = "/swarm_info"/>
+        <remap from="/Instruct" to = "/instruction"/>
+        <remap from="/bridge/goal_user2brig" to = "/goal_with_id"/>
+        <!-- Old swarm bridge Commit: fa15acfd7fefc5564c2e41578375811606ac7825
+Parents: 05a47a04edc96baa14671878024759b57a05fe14, 0d9152bf677f496dd4af9c0f8862349993aa2c69
+Author: Pupillen <m15351201779@163.com>
+Committer: Pupillen <m15351201779@163.com>
+Date: Thu Aug 08 2024 14:45:55 GMT+0800 -->
+
+        <remap from="~planning/heartbeat" to = "/drone_$(arg drone_id)_traj_server/heartbeat"/>
+        <!-- <remap from="/goal" to = "/goal_with_id"/> -->
+        <!-- <remap from="/goal" to = "/move_base_simple/goal"/> -->
+        <remap from ="/trigger" to="/move_base_simple/goal"/>
+        <remap from="~grid_map/odom" to="/drone_$(arg drone_id)_$(arg odometry_topic)"/>
+        <remap from="~grid_map/cloud" to="/drone_$(arg drone_id)_$(arg cloud_topic)"/>
+        <remap from="~grid_map/pose"   to = "/drone_$(arg drone_id)_$(arg camera_pose_topic)"/>
+        <remap from="~grid_map/depth" to = "/drone_$(arg drone_id)_$(arg depth_topic)"/>
+        <remap from="/position_cmd" to="drone_$(arg drone_id)_planning/pos_cmd"/>
+        <!-- traj_server -->
+        <param name="traj_server/time_forward" value="1.0" type="double"/>
+        <!-- planning fsm -->
+        <param name="fsm/flight_type" value="$(arg flight_type)" type="int"/>
+        <param name="fsm/ground_height_measurement" value="true" type="bool"/>
+        <!-- <param name="fsm/thresh_replan_time" value="1.0" type="double"/> -->
+        <!-- <param name="fsm/planning_horizon" value="$(arg planning_horizon)" type="double"/> -->
+        <!--always set to 1.5 times grater than sensing horizen-->
+        <param name="fsm/drone_id" value="$(arg drone_id)"/>
+        <param name="fsm/arrive_dis_thr" value="0.2"/>
+        <param name="fsm/odom_buffer_dis_threshold" value="0.5"/>
+        <param name="fsm/follower_dis" value="0.8"/>
+        <param name="fsm/emergency_time" value="1.0" type="double"/>
+        <param name="fsm/realworld_experiment" value="false"/>
+        <param name="fsm/fail_safe" value="true"/>
+        <param name="fsm/battery_thr" value="19.0" type="double"/>
+        <param name="fsm/waypoint_num" value="$(arg point_num)" type="int"/>
+        <param name="fsm/waypoint0_x" value="$(arg point0_x)" type="double"/>
+        <param name="fsm/waypoint0_y" value="$(arg point0_y)" type="double"/>
+        <param name="fsm/waypoint0_z" value="$(arg point0_z)" type="double"/>
+        <param name="fsm/waypoint1_x" value="$(arg point1_x)" type="double"/>
+        <param name="fsm/waypoint1_y" value="$(arg point1_y)" type="double"/>
+        <param name="fsm/waypoint1_z" value="$(arg point1_z)" type="double"/>
+        <param name="fsm/waypoint2_x" value="$(arg point2_x)" type="double"/>
+        <param name="fsm/waypoint2_y" value="$(arg point2_y)" type="double"/>
+        <param name="fsm/waypoint2_z" value="$(arg point2_z)" type="double"/>
+        <param name="fsm/waypoint3_x" value="$(arg point3_x)" type="double"/>
+        <param name="fsm/waypoint3_y" value="$(arg point3_y)" type="double"/>
+        <param name="fsm/waypoint3_z" value="$(arg point3_z)" type="double"/>
+        <param name="fsm/waypoint4_x" value="$(arg point4_x)" type="double"/>
+        <param name="fsm/waypoint4_y" value="$(arg point4_y)" type="double"/>
+        <param name="fsm/waypoint4_z" value="$(arg point4_z)" type="double"/>
+        <!-- <param name="grid_map/resolution" value="0.1" /> -->
+        <!-- local_map的size必须比depth_filter_maxdist大两个resoluiton -->
+        <param name="grid_map/local_update_range_x" value="8.0" />
+        <param name="grid_map/local_update_range_y" value="8.0" />
+        <param name="grid_map/local_update_range_z" value="4.0" />
+        <!-- <param name="grid_map/obstacles_inflation" value="0.5" /> -->
+        <param name="grid_map/obstacles_inflation" value="0.4" />
+
+        <param name="grid_map/local_map_margin" value="10"/>
+        <param name="grid_map/enable_virtual_wall" value="true"/>
+        <param name="grid_map/virtual_ceil" value="4.0"/>
+        <param name="grid_map/virtual_ground" value="-0.1"/>
+        <param name="grid_map/visual_inflat_map_height" value="4.0"/>
+
+        <!-- camera parameter -->
+        <param name="grid_map/cx" value="$(arg cx)"/>
+        <param name="grid_map/cy" value="$(arg cy)"/>
+        <param name="grid_map/fx" value="$(arg fx)"/>
+        <param name="grid_map/fy" value="$(arg fy)"/>
+        <!-- <param name="grid_map/k_depth_scaling_factor" value="1000.0"/> -->
+        <param name="grid_map/k_depth_scaling_factor" value="1.0"/>
+        <param name="grid_map/skip_pixel" value="2"/>
+        <param name="grid_map/use_depth_filter" value="true"/>
+        <param name="grid_map/depth_filter_maxdist"   value="6.0"/>
+        <param name="grid_map/depth_filter_mindist"   value="0.2"/>
+        <param name="grid_map/depth_filter_margin"    value="2"/>
+        <!-- local fusion -->
+        <!-- <param name="grid_map/p_hit" value="0.90"/>
+        <param name="grid_map/p_miss" value="0.45"/> -->
+        <param name="grid_map/p_hit" value="0.90"/>
+        <param name="grid_map/p_miss" value="0.45"/>
+        <param name="grid_map/p_min" value="0.12"/>
+        <param name="grid_map/p_max" value="0.90"/>
+        <param name="grid_map/p_occ" value="0.80"/>
+        <param name="grid_map/fading_time" value="-1.0"/>
+        <param name="grid_map/min_ray_length" value="0.1"/>
+        <!-- <param name="grid_map/max_ray_length" value="10.0"/> -->
+        <param name="grid_map/max_ray_length" value="6.0"/>
+        <param name="grid_map/show_occ_time" value="false"/>
+        <param name="grid_map/pose_type" value="1"/>
+        <param name="grid_map/frame_id" value="world"/>
+        <param name="grid_map/hit_accum_max" value="40" /> 
+        <param name="grid_map/hit_accum_threshold" value="10" />
+
+        <!-- Perception utils -->
+        <param name="perception_utils/top_angle" value="0.6" type="double"/>;
+        <param name="perception_utils/left_angle" value="0.76" type="double"/>;
+        <param name="perception_utils/right_angle" value="0.76" type="double"/>;
+        <param name="perception_utils/max_dist" value="6.0" type="double"/>;
+        <param name="perception_utils/vis_dist" value="1.0" type="double"/>;
+
+        <!-- posegraph -->
+        <param name="posegraph/connected_min_seqential_dis" value="4.0" type="double"/>
+        <param name="posegraph/connected_max_euler_dis" value="2.0" type="double"/>
+        <param name="posegraph/keypose_min_gap" value="1.0" type="double"/>
+
+        <!-- frontier -->
+        <param name="frontier/floor" value="1.0" type="double"/>
+        <param name="frontier/ceil" value="2.0" type="double"/>
+        <param name="frontier/cluster_min" value="100" type="int"/>
+        <param name="frontier/cluster_size_xy" value="3.0" type="double"/>
+        <param name="frontier/cluster_size_z" value="10.0" type="double"/>
+        <param name="frontier/down_sample" value="3" type="int"/>;
+        <param name="frontier/min_candidate_dist" value="0.51" type="double"/>
+        <param name="frontier/min_candidate_clearance_xy" value="0.21" type="double"/>
+        <param name="frontier/min_candidate_clearance_z" value="0.21" type="double"/>
+        <param name="frontier/min_candidate_clearance_unknown_xy" value="0.21" type="double"/>
+        <param name="frontier/min_candidate_clearance_unknown_z" value="0.21" type="double"/>
+        <param name="frontier/candidate_dphi" value="$(eval 30 * 3.1415926 / 180.0)" type="double"/>
+        <param name="frontier/candidate_phinum" value="6" type="int"/>
+        <param name="frontier/candidate_rnum" value="3" type="int"/>
+        <param name="frontier/candidate_rmin" value="0.1" type="double"/>
+        <param name="frontier/candidate_rmax" value="2.2" type="double"/>
+        <param name="frontier/candidate_znum" value="4" type="int"/>
+        <param name="frontier/candidate_zmin" value="-0.5" type="double"/>
+        <param name="frontier/candidate_zmax" value="0.5" type="double"/>
+        <param name="frontier/min_visib_num" value="4" type="int"/>;
+        <param name="frontier/min_view_finish_fraction" value="0.5" type="double"/>;
+        <param name="frontier/ftr_blacklist_radius" value="1.0" type="double"/>;
+        <param name="frontier/print_info" value="false" type="bool"/>;
+        
+        <!-- Hgrid -->
+        <param name="global_map/box_min_x" value="0" type="double"/>
+        <param name="global_map/box_min_y" value="-15" type="double"/>
+        <param name="global_map/box_min_z" value="0" type="double"/> 
+        <param name="global_map/box_max_x" value="55" type="double"/>
+        <param name="global_map/box_max_y" value="15" type="double"/>
+        <param name="global_map/box_max_z" value="4.0" type="double"/>
+        <!-- Hgrid 会判断当格子里的unknown_cell数量小于min_unknown且格子里无ftr,则判断covered -->
+        <param name="partitioning/min_unknown" value="2000" type="int"/>;  
+        <param name="partitioning/min_frontier" value="100" type="int"/>;
+        <!-- 格子里free数量大于min_free才会divided -->
+        <param name="partitioning/min_free" value="5000" type="int"/>;
+        <param name="partitioning/consistent_cost" value="-5" type="double"/>;
+        <param name="partitioning/consistent_cost2" value="8" type="double"/>;
+        <param name="partitioning/w_unknown" value="0.0" type="double"/>;
+        <param name="partitioning/grid_size" value="2.0" type="double"/>;
+        <param name="partitioning/use_swarm_tf" value="true" type="bool"/>;
+        <param name="partitioning/hgrid_vis_range" value="5" type="int"/>; <!-- -1: display all hgrids -->
+        <param name="partitioning/multilayer_hgrid" value="true" type="bool"/>; <!-- 0: monolayer hgrid 1: multilayer hgrid -->
+        <param name="partitioning/print_info" value="false" type="bool"/>;
+
+        <!-- exploration -->
+        <param name="exploration/radius_close_goal" value="1.0" type="double"/>
+        <param name="exploration/radius_far_goal" value="7.5" type="double"/>
+        <param name="exploration/refine_local" value="false" type="bool"/>
+        <param name="exploration/refined_num" value="4" type="int"/>
+        <param name="exploration/refined_radius" value="5.0" type="double"/>
+        <param name="exploration/max_decay" value="0.8" type="double"/>
+        <param name="exploration/top_view_num" value="15" type="int"/>
+        <param name="exploration/vm" value="1.5" type="double"/>
+        <param name="exploration/am" value="2.0" type="double"/>
+        <param name="exploration/yd" value="$(eval 30 * 3.1415926 / 180.0)" type="double"/>
+        <param name="exploration/ydd" value="$(eval 45 * 3.1415926 / 180.0)" type="double"/>
+        <param name="exploration/w_dir" value="2.0" type="double"/>
+        <param name="exploration/tsp_dir" value="$(find lkh_tsp_solver)/resource" type="string"/>
+        <param name="exploration/relax_time" value="1.0" type="double"/>
+
+        <!-- Fsm -->
+        <!-- if time to the end of the traj < thresh_replan1 -->
+        <param name="fsm/thresh_replan1" value="0.5" type="double"/>
+        <!-- if aim Frontier Covered & time > thresh_replan2 -->
+        <param name="fsm/thresh_replan2" value="1.5" type="double"/>
+        <!-- if time > thresh_replan3 -->
+        <param name="fsm/thresh_replan3" value="10.0" type="double"/>
+
+        <param name="fsm/replan_time" value="0.200" type="double"/>
+
+        <!-- planner manager -->
+        <param name="manager/max_vel" value="$(arg max_vel)" type="double"/>
+        <param name="manager/max_acc" value="$(arg max_acc)" type="double"/>
+        <!-- <param name="manager/polyTraj_piece_length" value="1.25" type="double"/> -->
+        <!-- <param name="manager/planning_horizon" value="$(arg planning_horizon)" type="double"/> -->
+        <param name="manager/use_multitopology_trajs" value="$(arg use_multitopology_trajs)" type="bool"/>
+        <param name="manager/drone_id" value="$(arg drone_id)"/>
+        <!-- trajectory optimization -->
+        <!-- <param name="optimization/constraint_points_perPiece" value="5" type="int"/> -->
+        <param name="optimization/weight_obstacle" value="10000.0" type="double"/>
+        <param name="optimization/weight_obstacle_soft" value="0.0" type="double"/>
+        <param name="optimization/weight_trust_region" value="10.0" type="double"/>
+        <param name="optimization/weight_curve_fitting" value="1000.0" type="double"/>
+        <param name="optimization/weight_plane" value="10.0" type="double"/>
+        <param name="optimization/weight_swarm" value="10000.0" type="double"/>
+        <param name="optimization/weight_feasibility" value="250.0" type="double"/>
+        <param name="optimization/weight_sqrvariance" value="0.0" type="double"/>
+        <param name="optimization/weight_time" value="10.0" type="double"/>
+        <param name="optimization/obstacle_clearance" value="0.1" type="double"/>
+        <param name="optimization/obstacle_clearance_soft" value="1.5" type="double"/>
+        <param name="optimization/swarm_clearance" value="0.45" type="double"/> <!-- heterogeneous support: my required clearance -->
+        <!-- <param name="optimization/max_vel" value="$(arg max_vel)" type="double"/>
+        <param name="optimization/max_acc" value="$(arg max_acc)" type="double"/> -->
+        <param name="optimization/max_jer" value="$(arg max_jer)" type="double"/>
+        <param name="optimization/max_sna" value="$(arg max_sna)" type="double"/>
+    </node>
+</launch>
