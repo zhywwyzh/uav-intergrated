@@ -406,7 +406,7 @@ bool TrajOpt::generate_traj(const Eigen::MatrixXd& iniState,
 
   auto toc = std::chrono::steady_clock::now();
 
-  std::cout << "\033[32m>ret: " << opt_ret << "\033[0m" << std::endl;
+  // std::cout << "\033[32m>ret: " << opt_ret << "\033[0m" << std::endl;
 
   // std::cout << "innerloop costs: " << tictoc_innerloop_ * 1e-6 << "ms" << std::endl;
   // std::cout << "integral costs: " << tictoc_integral_ * 1e-6 << "ms" << std::endl;
@@ -433,9 +433,9 @@ bool TrajOpt::generate_traj(const Eigen::MatrixXd& iniState,
   mincoOpt_.generate(initS_, tailS, P, dT);
   traj = mincoOpt_.getTraj();
 
-  std::cout << "tailV: " << tailV.transpose() << std::endl;
-  std::cout << "maxOmega: " << getMaxOmega(traj) << std::endl;
-  std::cout << "maxThrust: " << traj.getMaxThrust() << std::endl;
+  // std::cout << "tailV: " << tailV.transpose() << std::endl;
+  // std::cout << "maxOmega: " << getMaxOmega(traj) << std::endl;
+  // std::cout << "maxThrust: " << traj.getMaxThrust() << std::endl;
 
   init_traj_ = traj;
   init_tail_f_ = tail_f;

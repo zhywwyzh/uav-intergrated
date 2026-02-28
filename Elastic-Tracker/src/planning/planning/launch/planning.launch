@@ -4,8 +4,9 @@
   <arg name="rhoTracking_"/>
   <arg name="target_name_"/>
   <arg name="odom_topic" default="odom"/>
-  <arg name="trigger_topic" default="/triger"/>
+  <arg name="trigger_topic" default="/track_trigger_internal"/>
   <arg name="land_trigger_topic" default="/land_triger"/>
+  <arg name="preempt_topic" default="/mix/preempt"/>
   <arg name="position_cmd_topic" default="position_cmd"/>
 
   <!-- <node pkg="nodelet" type="nodelet" name="plan_manage" args="manager" output="screen">
@@ -21,6 +22,7 @@
     <remap from="~target" to="$(arg target_name_)"/>
     <remap from="~triger" to="$(arg trigger_topic)"/>
     <remap from="~land_triger" to="$(arg land_trigger_topic)"/>
+    <remap from="~preempt" to="$(arg preempt_topic)"/>
 
     <param name="plan_hz" value="20"/>
 
@@ -49,6 +51,7 @@
     <remap from="~position_cmd" to="$(arg position_cmd_topic)"/>
     <remap from="~trajectory" to="trajectory"/>
     <remap from="~heartbeat" to="heartbeat"/>
+    <remap from="~preempt" to="$(arg preempt_topic)"/>
     <param name="time_forward" value="1.0" type="double"/>
   </node>
 </launch>

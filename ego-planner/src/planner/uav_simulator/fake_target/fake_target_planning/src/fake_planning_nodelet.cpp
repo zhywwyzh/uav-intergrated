@@ -334,7 +334,7 @@ class Nodelet : public nodelet::Nodelet {
     }
     if (valid) {
       force_hover_ = false;
-      ROS_WARN("[planner] REPLAN SUCCESS");
+      // ROS_WARN("[planner] REPLAN SUCCESS");
       replanStateMsg_.state = 0;
       replanState_pub_.publish(replanStateMsg_);
       // NOTE : if the trajectory is known, watch that direction

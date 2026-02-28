@@ -9,6 +9,8 @@ import argparse
 import rospy
 from geometry_msgs.msg import PoseStamped
 
+PERCH_TAG = "\033[35m[PERCH]\033[0m"
+
 
 def topic_type_compatible(topic_name, expected_type):
     try:
@@ -34,7 +36,7 @@ def topic_type_compatible(topic_name, expected_type):
 def main():
     parser = argparse.ArgumentParser(description="Trigger perch by publishing /perch_trigger")
     parser.add_argument("--trigger-topic", default="/perch_trigger")
-    parser.add_argument("--repeat", type=int, default=5)
+    parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--rate", type=float, default=10.0)
     parser.add_argument("--x", type=float, default=0.0)
     parser.add_argument("--y", type=float, default=0.0)
@@ -42,6 +44,7 @@ def main():
     args = parser.parse_args()
 
     rospy.init_node("trigger_perch", anonymous=True)
+    rospy.loginfo("%s Trigger requested", PERCH_TAG)
 
     if not topic_type_compatible(args.trigger_topic, "geometry_msgs/PoseStamped"):
         rospy.logerr("Pre-check failed. Abort.")
@@ -63,7 +66,7 @@ def main():
         pub.publish(msg)
         rate.sleep()
 
-    rospy.loginfo("Published %s (%d times)", args.trigger_topic, repeat)
+    rospy.loginfo("%s Published %s (%d times)", PERCH_TAG, args.trigger_topic, repeat)
 
 
 if __name__ == "__main__":

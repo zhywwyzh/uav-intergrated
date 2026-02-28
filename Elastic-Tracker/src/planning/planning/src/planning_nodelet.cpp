@@ -18,6 +18,10 @@
 #include <visualization/visualization.hpp>
 #include <wr_msg/wr_msg.hpp>
 
+#ifndef TRACK_WARN
+#define TRACK_WARN(fmt, ...) ROS_WARN("\033[34m[TRACK]\033[0m " fmt, ##__VA_ARGS__)
+#endif
+
 namespace planning {
 
 Eigen::IOFormat CommaInitFmt(Eigen::StreamPrecision, Eigen::DontAlignCols, ", ", ", ", "", "", " << ", ";");
@@ -25,7 +29,7 @@ Eigen::IOFormat CommaInitFmt(Eigen::StreamPrecision, Eigen::DontAlignCols, ", ",
 class Nodelet : public nodelet::Nodelet {
  private:
   std::thread initThread_;
-  ros::Subscriber gridmap_sub_, odom_sub_, target_sub_, triger_sub_, land_triger_sub_;
+  ros::Subscriber gridmap_sub_, odom_sub_, target_sub_, triger_sub_, land_triger_sub_, preempt_sub_;
   ros::Timer plan_timer_;
 
   ros::Publisher traj_pub_, heartbeat_pub_, replanState_pub_;
@@ -111,6 +115,8 @@ class Nodelet : public nodelet::Nodelet {
     goal_ << msgPtr->pose.position.x, msgPtr->pose.position.y, 0.9;
     triger_received_ = true;
     last_trigger_stamp_ = ros::Time::now();
+    ROS_INFO("\033[34m[TRACK]\033[0m Trigger received: x=%.2f y=%.2f z=%.2f",
+             msgPtr->pose.position.x, msgPtr->pose.position.y, msgPtr->pose.position.z);
   }
 
   void land_triger_callback(const geometry_msgs::PoseStampedConstPtr& msgPtr) {
@@ -122,6 +128,17 @@ class Nodelet : public nodelet::Nodelet {
     land_q_.y() = msgPtr->pose.orientation.y;
     land_q_.z() = msgPtr->pose.orientation.z;
     land_triger_received_ = true;
+    ROS_INFO("\033[34m[TRACK]\033[0m Land trigger received.");
+  }
+
+  void preempt_callback(const std_msgs::Empty::ConstPtr& /*msgPtr*/) {
+    triger_received_ = false;
+    land_triger_received_ = false;
+    wait_hover_ = true;
+    force_hover_ = true;
+    last_trigger_stamp_ = ros::Time(0);
+
+    TRACK_WARN("Preempt received, interrupted current task.");
   }
 
   void odom_callback(const nav_msgs::Odometry::ConstPtr& msgPtr) {
@@ -221,7 +238,7 @@ class Nodelet : public nodelet::Nodelet {
           pub_hover_p(odom_p, ros::Time::now());
           wait_hover_ = true;
         }
-        ROS_WARN("[planner] HOVERING...");
+        TRACK_WARN("[planner] HOVERING...");
         return;
       }
       // TODO get the orientation fo target and calculate the pose of landing point
@@ -242,7 +259,7 @@ class Nodelet : public nodelet::Nodelet {
           pub_hover_p(odom_p, ros::Time::now());
           wait_hover_ = true;
         }
-        ROS_WARN("[planner] HOVERING...");
+        TRACK_WARN("[planner] HOVERING...");
         replanStateMsg_.state = -1;
         replanState_pub_.publish(replanStateMsg_);
         return;
@@ -411,7 +428,7 @@ class Nodelet : public nodelet::Nodelet {
     }
     if (valid) {
       force_hover_ = false;
-      ROS_WARN("[planner] REPLAN SUCCESS");
+      // TRACK_WARN("[planner] REPLAN SUCCESS");
       replanStateMsg_.state = 0;
       replanState_pub_.publish(replanStateMsg_);
       Eigen::Vector3d dp = target_p + target_v * 0.03 - iniState.col(0);
@@ -495,10 +512,10 @@ class Nodelet : public nodelet::Nodelet {
       bool new_goal = (local_goal - traj_poly_.getPos(traj_poly_.getTotalDuration())).norm() > tracking_dist_;
       if (!new_goal) {
         if (last_traj_t_rest < 1.0) {
-          ROS_WARN("[planner] NEAR GOAL...");
+          TRACK_WARN("[planner] NEAR GOAL...");
           no_need_replan = true;
         } else if (validcheck(traj_poly_, replan_stamp_, last_traj_t_rest)) {
-          ROS_WARN("[planner] NO NEED REPLAN...");
+          TRACK_WARN("[planner] NO NEED REPLAN...");
           double t_delta = traj_poly_.getTotalDuration() < 1.0 ? traj_poly_.getTotalDuration() : 1.0;
           double t_yaw = (ros::Time::now() - replan_stamp_).toSec() + t_delta;
           Eigen::Vector3d un_known_p = traj_poly_.getPos(t_yaw);
@@ -515,7 +532,7 @@ class Nodelet : public nodelet::Nodelet {
         pub_hover_p(odom_p, ros::Time::now());
         wait_hover_ = true;
       }
-      ROS_WARN("[planner] HOVERING...");
+      TRACK_WARN("[planner] HOVERING...");
       replanStateMsg_.state = -1;
       replanState_pub_.publish(replanStateMsg_);
       return;
@@ -600,7 +617,7 @@ class Nodelet : public nodelet::Nodelet {
     }
     if (valid) {
       force_hover_ = false;
-      ROS_WARN("[planner] REPLAN SUCCESS");
+      // TRACK_WARN("[planner] REPLAN SUCCESS");
       replanStateMsg_.state = 0;
       replanState_pub_.publish(replanStateMsg_);
       // NOTE : if the trajectory is known, watch that direction
@@ -770,7 +787,7 @@ class Nodelet : public nodelet::Nodelet {
     nh.getParam("tolerance_d", tolerance_d_);
     nh.getParam("debug", debug_);
     nh.getParam("fake", fake_);
-    nh.param("trigger_hold_sec", trigger_hold_sec_, 2.0);
+    nh.param("trigger_hold_sec", trigger_hold_sec_, -1.0);
 
     gridmapPtr_ = std::make_shared<mapping::OccGridMap>();
     envPtr_ = std::make_shared<env::Env>(nh, gridmapPtr_);
@@ -800,7 +817,8 @@ class Nodelet : public nodelet::Nodelet {
     target_sub_ = nh.subscribe<nav_msgs::Odometry>("target", 10, &Nodelet::target_callback, this, ros::TransportHints().tcpNoDelay());
     triger_sub_ = nh.subscribe<geometry_msgs::PoseStamped>("triger", 10, &Nodelet::triger_callback, this, ros::TransportHints().tcpNoDelay());
     land_triger_sub_ = nh.subscribe<geometry_msgs::PoseStamped>("land_triger", 10, &Nodelet::land_triger_callback, this, ros::TransportHints().tcpNoDelay());
-    ROS_WARN("Planning node initialized!");
+    preempt_sub_ = nh.subscribe<std_msgs::Empty>("preempt", 10, &Nodelet::preempt_callback, this, ros::TransportHints().tcpNoDelay());
+    TRACK_WARN("Planning node initialized!");
   }
 
  public:

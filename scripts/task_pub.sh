@@ -1,5 +1,5 @@
 #!/bin/bash
-# task_pub.sh - interactive trigger menu (direct-trigger mode)
+# task_pub.sh - interactive trigger menu (preempt-trigger mode)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -21,7 +21,7 @@ check_ros() {
 show_menu() {
     clear
     echo -e "${BLUE}==========================================${NC}"
-    echo -e "${YELLOW}      Module Trigger Menu (Direct Trigger)${NC}"
+    echo -e "${YELLOW}      Module Trigger Menu (Preempt Trigger)${NC}"
     echo -e "${BLUE}==========================================${NC}"
     echo -e "  ${GREEN}1${NC} - Trigger ego"
     echo -e "  ${GREEN}2${NC} - Trigger track (trigger only)"
@@ -41,7 +41,7 @@ main() {
                 python3 "$PROJECT_ROOT/tools/trigger_ego.py"
                 ;;
             2)
-                python3 "$PROJECT_ROOT/tools/trigger_track.py" --no-fake-inputs --duration 2
+                python3 "$PROJECT_ROOT/tools/trigger_track.py" --duration 15
                 ;;
             3)
                 python3 "$PROJECT_ROOT/tools/trigger_track_land.py"

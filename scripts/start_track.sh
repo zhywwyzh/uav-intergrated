@@ -34,10 +34,11 @@ cleanup() {
 
 trap cleanup SIGINT SIGTERM SIGQUIT
 
-YOLO_TOPIC="${YOLO_TOPIC:-/yolov5trt/bboxes_pub}"
+YOLO_TOPIC="${YOLO_TOPIC:-/target/odom}"
 ODOM_TOPIC="${ODOM_TOPIC:-/ekf/ekf_odom}"
 LOCAL_MAP_TOPIC="${LOCAL_MAP_TOPIC:-/drone_0_ego_planner_node/grid_map/occupancy_inflate}"
 TRACK_TRIGGER_TOPIC="${TRACK_TRIGGER_TOPIC:-/track_trigger}"
+TRACK_POSITION_CMD_TOPIC="${TRACK_POSITION_CMD_TOPIC:-/drone_0_planning/pos_cmd}"
 AUTO_TRACK_TRIGGER="${AUTO_TRACK_TRIGGER:-0}"
 
 echo "1. Tracker topic configuration:"
@@ -45,6 +46,7 @@ echo "  Source YOLO topic : $YOLO_TOPIC"
 echo "  Source Odom topic : $ODOM_TOPIC"
 echo "  Local Map topic   : $LOCAL_MAP_TOPIC"
 echo "  Track Trigger topic: $TRACK_TRIGGER_TOPIC"
+echo "  Track Cmd topic   : $TRACK_POSITION_CMD_TOPIC"
 
 echo ""
 echo "2. Launching Elastic-Tracker real_external.launch..."
@@ -55,7 +57,8 @@ rm -f "$TRACK_PID_FILE"
 roslaunch planning real_external.launch \
     yolo_topic:="$YOLO_TOPIC" \
     odom_topic:="$ODOM_TOPIC" \
-    local_map_topic:="$LOCAL_MAP_TOPIC" &
+    local_map_topic:="$LOCAL_MAP_TOPIC" \
+    position_cmd_topic:="$TRACK_POSITION_CMD_TOPIC" &
 TRACK_PID=$!
 echo "$TRACK_PID" > "$TRACK_PID_FILE"
 echo "  real_external.launch started (PID: $TRACK_PID)"

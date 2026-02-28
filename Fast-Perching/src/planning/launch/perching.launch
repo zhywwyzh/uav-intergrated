@@ -5,8 +5,10 @@
     <arg name="init_z" default="2.0"/> 
   
     <arg name="init_yaw" default="0.0"/>
-    <arg name="trigger_topic" default="/perch_trigger"/>
+    <arg name="trigger_topic" default="/perch_trigger_internal"/>
     <arg name="land_trigger_topic" default="/perch_land_trigger"/>
+    <arg name="preempt_topic" default="/mix/preempt"/>
+    <arg name="position_cmd_topic" default="/drone_0_planning/pos_cmd"/>
 
     <group ns="$(arg module_ns)">
       <node pkg="odom_visualization" name="odom_visualization" type="odom_visualization" output="screen">
@@ -29,6 +31,8 @@
         <remap from="~heartbeat" to="heartbeat"/>
         <remap from="~trajectory" to="trajectory"/>
         <remap from="~replanState" to="replanState"/>
+        <remap from="~position_cmd" to="$(arg position_cmd_topic)"/>
+        <remap from="~preempt" to="$(arg preempt_topic)"/>
         <remap from="~triger" to="$(arg trigger_topic)"/>
         <remap from="~land_triger" to="$(arg land_trigger_topic)"/>
         <remap from="~target" to="/target/odom"/>

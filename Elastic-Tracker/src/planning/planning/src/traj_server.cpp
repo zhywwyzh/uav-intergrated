@@ -7,6 +7,10 @@
 
 #include <traj_opt/poly_traj_utils.hpp>
 
+#ifndef TRACK_WARN
+#define TRACK_WARN(fmt, ...) ROS_WARN("\033[34m[TRACK]\033[0m " fmt, ##__VA_ARGS__)
+#endif
+
 ros::Publisher pos_cmd_pub_;
 ros::Time heartbeat_time_;
 bool receive_traj_ = false;
@@ -80,7 +84,7 @@ bool exe_traj(const quadrotor_msgs::PolyTraj &trajMsg) {
     }
     Trajectory traj(dura, cMats);
     if (t > traj.getTotalDuration()) {
-      ROS_ERROR("[traj_server] trajectory too short left!");
+      // ROS_ERROR("[traj_server] trajectory too short left!");
       return false;
     }
     Eigen::Vector3d p, v, a;
@@ -115,6 +119,13 @@ void polyTrajCallback(const quadrotor_msgs::PolyTrajConstPtr &msgPtr) {
   }
 }
 
+void preemptCallback(const std_msgs::EmptyConstPtr &msg) {
+  (void)msg;
+  receive_traj_ = false;
+  flight_start_ = false;
+  TRACK_WARN("Preempt received, traj server output suspended.");
+}
+
 void cmdCallback(const ros::TimerEvent &e) {
   if (!receive_traj_) {
     return;
@@ -139,6 +150,7 @@ int main(int argc, char **argv) {
 
   ros::Subscriber poly_traj_sub = nh.subscribe("trajectory", 10, polyTrajCallback);
   ros::Subscriber heartbeat_sub = nh.subscribe("heartbeat", 10, heartbeatCallback);
+  ros::Subscriber preempt_sub = nh.subscribe("preempt", 10, preemptCallback);
 
   pos_cmd_pub_ = nh.advertise<quadrotor_msgs::PositionCommand>("position_cmd", 50);
 
@@ -146,7 +158,7 @@ int main(int argc, char **argv) {
 
   ros::Duration(1.0).sleep();
 
-  ROS_WARN("[Traj server]: ready.");
+  TRACK_WARN("[Traj server]: ready.");
 
   ros::spin();
 

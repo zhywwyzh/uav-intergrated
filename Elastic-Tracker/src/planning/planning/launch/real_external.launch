@@ -1,10 +1,12 @@
 <launch>
   <arg name="module_ns" default="track"/>
   <arg name="odom_topic" default="/ekf/ekf_odom"/>
-  <arg name="yolo_topic" default="/yolov5trt/bboxes_pub"/>
+  <arg name="yolo_topic" default="/target/odom"/>
   <arg name="local_map_topic" default="/drone_0_ego_planner_node/grid_map/occupancy_inflate"/>
-  <arg name="trigger_topic" default="/track_trigger"/>
+  <arg name="trigger_topic" default="/track_trigger_internal"/>
   <arg name="land_trigger_topic" default="/track_land_trigger"/>
+  <arg name="preempt_topic" default="/mix/preempt"/>
+  <arg name="position_cmd_topic" default="/drone_0_planning/pos_cmd"/>
   <arg name="map_x_length" default="80.0"/>
   <arg name="map_y_length" default="80.0"/>
   <arg name="map_z_length" default="8.0"/>
@@ -17,10 +19,12 @@
       <param name="num_worker_threads" value="16"/>
     </node>
 
-    <include file="$(find target_ekf)/launch/target_ekf.launch">
-      <arg name="yolo_topic" value="$(arg yolo_topic)"/>
-      <arg name="odom_topic" value="$(arg odom_topic)"/>
-    </include>
+    <node pkg="target_ekf" name="target_ekf_node" type="target_ekf_sim_node" output="screen">
+      <rosparam command="load" file="$(find target_ekf)/config/camera.yaml" />
+      <param name="pitch_thr" value="37"/>
+      <remap from="~yolo" to="$(arg yolo_topic)"/>
+      <remap from="~odom" to="$(arg odom_topic)"/>
+    </node>
 
     <node pkg="nodelet" type="nodelet" name="mapping" args="load mapping/Nodelet manager" output="screen">
       <param name="use_global_map" value="true"/>
@@ -48,7 +52,8 @@
       <arg name="odom_topic" value="$(arg odom_topic)"/>
       <arg name="trigger_topic" value="$(arg trigger_topic)"/>
       <arg name="land_trigger_topic" value="$(arg land_trigger_topic)"/>
-      <arg name="position_cmd_topic" value="position_cmd"/>
+      <arg name="preempt_topic" value="$(arg preempt_topic)"/>
+      <arg name="position_cmd_topic" value="$(arg position_cmd_topic)"/>
     </include>
   </group>
 </launch>

@@ -9,6 +9,8 @@ import argparse
 import rospy
 from geometry_msgs.msg import PoseStamped
 
+TRACK_TAG = "\033[34m[TRACK]\033[0m"
+
 
 def topic_type_compatible(topic_name, expected_type):
     try:
@@ -42,6 +44,7 @@ def main():
     args = parser.parse_args()
 
     rospy.init_node("trigger_track_land", anonymous=True)
+    rospy.loginfo("%s Land trigger requested", TRACK_TAG)
 
     if not topic_type_compatible(args.trigger_topic, "geometry_msgs/PoseStamped"):
         rospy.logerr("Pre-check failed. Abort.")
@@ -63,7 +66,7 @@ def main():
         pub.publish(msg)
         rate.sleep()
 
-    rospy.loginfo("Published %s (%d times)", args.trigger_topic, repeat)
+    rospy.loginfo("%s Published %s (%d times)", TRACK_TAG, args.trigger_topic, repeat)
 
 
 if __name__ == "__main__":

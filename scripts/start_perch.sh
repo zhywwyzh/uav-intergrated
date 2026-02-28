@@ -87,6 +87,8 @@ echo "=== Starting Perch Node ==="
 echo "Startup parameters:"
 echo "  Position: x=$INIT_X, y=$INIT_Y, z=$INIT_Z"
 echo "  Orientation: yaw=$INIT_YAW rad"
+PERCH_POSITION_CMD_TOPIC="${PERCH_POSITION_CMD_TOPIC:-/drone_0_planning/pos_cmd}"
+echo "  Cmd topic: $PERCH_POSITION_CMD_TOPIC"
 
 echo ""
 # Start new node
@@ -102,7 +104,8 @@ roslaunch planning perching.launch \
     init_x:="$INIT_X" \
     init_y:="$INIT_Y" \
     init_z:="$INIT_Z" \
-    init_yaw:="$INIT_YAW" &
+    init_yaw:="$INIT_YAW" \
+    position_cmd_topic:="$PERCH_POSITION_CMD_TOPIC" &
 PERCHING_PID=$!
 echo $PERCHING_PID > "$PERCHING_PID_FILE"
 echo "  perching.launch started (PID: $PERCHING_PID)"

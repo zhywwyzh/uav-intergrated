@@ -2,6 +2,10 @@
 #include <plan_manage/planner_manager.h>
 #include <thread>
 
+#ifndef EGO_WARN
+#define EGO_WARN(fmt, ...) ROS_WARN("\033[32m[EGO]\033[0m " fmt, ##__VA_ARGS__)
+#endif
+
 namespace ego_planner
 {
 
@@ -63,7 +67,7 @@ namespace ego_planner
          << " pathes->size()=" << (pathes ? (int)pathes->size() : -1) << " touch_goal=" << touch_goal
          << " continous_failures_count_=" << continous_failures_count_ << endl;
     if ((start_pt - final_goal).norm() < 0.01) // Do not return!
-      ROS_WARN("The given goal is close to me.");
+      EGO_WARN("The given goal is close to me.");
 
     /*** STEP 1: INIT ***/
     // densityEval(start_pt, local_target_pt);
@@ -266,7 +270,7 @@ namespace ego_planner
       // }
     }
     if (total_time < 0.1)
-      ROS_WARN("total_time=%f is too small!", total_time);
+      EGO_WARN("total_time=%f is too small!", total_time);
 
     total_time *= 1.2;
 
@@ -539,11 +543,11 @@ namespace ego_planner
       Eigen::Vector3d safe_pt;
       if (getNearbySafePt(trajPtVec.front(), 2, safe_pt))
       {
-        ROS_WARN("Adjust start point by %fm", (safe_pt - trajPtVec.front()).norm());
+        EGO_WARN("Adjust start point by %fm", (safe_pt - trajPtVec.front()).norm());
         trajPtVec.front() = safe_pt;
       }
       else
-        ROS_WARN("Can't find any safe point near the init path head.");
+        EGO_WARN("Can't find any safe point near the init path head.");
     }
     if (map_->getOcc(trajPtVec.back()) > 0)
     {
@@ -553,7 +557,7 @@ namespace ego_planner
         trajPtVec.back() = safe_pt;
       }
       else
-        ROS_WARN("Can't find any safe point near the init path end.");
+        EGO_WARN("Can't find any safe point near the init path end.");
     }
 
     // step2: compute inner points
@@ -1009,7 +1013,7 @@ namespace ego_planner
         all_rays->push_back(ray);
     }
 
-    // ROS_WARN("preferred_speed=%f", best_ray.preferred_speed);
+    // EGO_WARN("preferred_speed=%f", best_ray.preferred_speed);
 
     // while (!sample_pts.empty())
     // {
@@ -1088,7 +1092,7 @@ namespace ego_planner
       count++;
     }
     double avg_preferred_speed = speed_sum / count;
-    // ROS_WARN("avg_preferred_speed=%f, count=%d", avg_preferred_speed, count);
+    // EGO_WARN("avg_preferred_speed=%f, count=%d", avg_preferred_speed, count);
 
     pp_.max_vel_ = min(avg_preferred_speed, pp_.max_vel_user_);
     pp_.max_acc_ = min(2 * avg_preferred_speed, pp_.max_acc_user_);

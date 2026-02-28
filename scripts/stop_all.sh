@@ -46,6 +46,7 @@ kill_pid_file_if_alive "$TMP_DIR/start_perch.pid" "start_perch.sh"
 kill_pid_file_if_alive "$TMP_DIR/track_real.pid" "real_external.launch"
 kill_pid_file_if_alive "$TMP_DIR/perching.pid" "perching.launch"
 kill_pid_file_if_alive "$TMP_DIR/run_in_sim.pid" "multidrone_sim.launch"
+kill_pid_file_if_alive "$TMP_DIR/task_trigger_arbiter.pid" "task_trigger_arbiter.py"
 kill_pid_file_if_alive "$TMP_DIR/stop_script.pid" "stop helper"
 
 echo "4) kill residual processes by pattern"
@@ -53,6 +54,7 @@ pkill -f "mission_fsm multidrone_sim.launch" 2>/dev/null || true
 pkill -f "mission_fsm run_in_sim.xml" 2>/dev/null || true
 pkill -f "planning real_external.launch" 2>/dev/null || true
 pkill -f "perching.launch" 2>/dev/null || true
+pkill -f "task_trigger_arbiter.py" 2>/dev/null || true
 pkill -f "$PROJECT_ROOT/scripts/mix.sh" 2>/dev/null || true
 
 echo "5) clear mix status files"

@@ -3,20 +3,20 @@
 Trigger track module directly.
 
 Default behavior:
-1) publish /track_trigger continuously
-2) publish fake YOLO + odom continuously (so track can run without external detector/odom)
+1) publish /track_trigger once
+2) publish fake target-odom + ego-odom continuously
 
 Set --no-fake-inputs to only send trigger messages.
 """
 
 import argparse
 import copy
-import random
 
 import rospy
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry
-from object_detection_msgs.msg import BoundingBox, BoundingBoxes
+
+TRACK_TAG = "\033[34m[TRACK]\033[0m"
 
 
 def topic_type_compatible(topic_name, expected_type):
@@ -48,21 +48,15 @@ class OdomCache:
         self.latest = msg
 
 
-def build_bbox(width, height, cls_name, prob):
-    cx = width * 0.5 + random.uniform(-0.1, 0.1) * width
-    cy = height * 0.5 + random.uniform(-0.1, 0.1) * height
-    bw = width * 0.12
-    bh = height * 0.18
-
-    box = BoundingBox()
-    box.probability = float(prob)
-    box.xmin = int(max(0, cx - bw * 0.5))
-    box.ymin = int(max(0, cy - bh * 0.5))
-    box.xmax = int(min(width - 1, cx + bw * 0.5))
-    box.ymax = int(min(height - 1, cy + bh * 0.5))
-    box.id = 0
-    box.Class = cls_name
-    return box
+def build_target_odom(base_odom, frame_id, dx, dy, dz):
+    msg = copy.deepcopy(base_odom)
+    msg.header.stamp = rospy.Time.now()
+    if frame_id:
+        msg.header.frame_id = frame_id
+    msg.pose.pose.position.x += float(dx)
+    msg.pose.pose.position.y += float(dy)
+    msg.pose.pose.position.z += float(dz)
+    return msg
 
 
 def build_trigger_msg():
@@ -70,7 +64,7 @@ def build_trigger_msg():
     msg.header.stamp = rospy.Time.now()
     msg.pose.position.x = 0.0
     msg.pose.position.y = 0.0
-    msg.pose.position.z = 0.0
+    msg.pose.position.z = 1.0
     msg.pose.orientation.w = 1.0
     return msg
 
@@ -79,12 +73,13 @@ def main():
     parser = argparse.ArgumentParser(description="Trigger track with optional fake inputs")
     parser.add_argument("--trigger-topic", default="/track_trigger")
     parser.add_argument("--trigger-rate", type=float, default=5.0)
+    parser.add_argument("--trigger-repeat", type=int, default=1)
 
     parser.add_argument("--fake-inputs", dest="fake_inputs", action="store_true")
     parser.add_argument("--no-fake-inputs", dest="fake_inputs", action="store_false")
     parser.set_defaults(fake_inputs=True)
 
-    parser.add_argument("--yolo-topic", default="/yolov5trt/bboxes_pub")
+    parser.add_argument("--yolo-topic", default="/target/odom")
     parser.add_argument("--odom-topic", default="/ekf/ekf_odom")
     parser.add_argument("--source-odom-topic", default="/unity_odom")
     parser.add_argument("--source-odom-timeout", type=float, default=10.0)
@@ -94,20 +89,20 @@ def main():
 
     parser.add_argument("--rate", type=float, default=5.0, help="fake input publish rate")
     parser.add_argument("--duration", type=float, default=0.0, help="seconds; <=0 means run until Ctrl+C")
-    parser.add_argument("--frame-id", default="camera_link")
-    parser.add_argument("--class-name", default="origin")
-    parser.add_argument("--prob", type=float, default=1.0)
-    parser.add_argument("--width", type=int, default=640)
-    parser.add_argument("--height", type=int, default=480)
+    parser.add_argument("--frame-id", default="world")
+    parser.add_argument("--target-offset-x", type=float, default=10.0)
+    parser.add_argument("--target-offset-y", type=float, default=0.0)
+    parser.add_argument("--target-offset-z", type=float, default=1.0)
     args = parser.parse_args()
 
     rospy.init_node("trigger_track", anonymous=True)
+    rospy.loginfo("%s Trigger requested", TRACK_TAG)
 
     checks = [topic_type_compatible(args.trigger_topic, "geometry_msgs/PoseStamped")]
     if args.fake_inputs:
         checks.extend(
             [
-                topic_type_compatible(args.yolo_topic, "object_detection_msgs/BoundingBoxes"),
+                topic_type_compatible(args.yolo_topic, "nav_msgs/Odometry"),
                 topic_type_compatible(args.odom_topic, "nav_msgs/Odometry"),
             ]
         )
@@ -116,7 +111,7 @@ def main():
         return
 
     trigger_pub = rospy.Publisher(args.trigger_topic, PoseStamped, queue_size=10)
-    yolo_pub = rospy.Publisher(args.yolo_topic, BoundingBoxes, queue_size=10)
+    yolo_pub = rospy.Publisher(args.yolo_topic, Odometry, queue_size=20)
     odom_pub = rospy.Publisher(args.odom_topic, Odometry, queue_size=20)
 
     odom_cache = OdomCache()
@@ -143,10 +138,17 @@ def main():
                 return
             rospy.sleep(0.1)
 
-    rospy.loginfo("Publishing track trigger on %s at %.2f Hz", args.trigger_topic, args.trigger_rate)
+    rospy.loginfo(
+        "%s Publishing track trigger on %s (%d times at %.2f Hz)",
+        TRACK_TAG,
+        args.trigger_topic,
+        max(1, int(args.trigger_repeat)),
+        args.trigger_rate,
+    )
     if args.fake_inputs:
         rospy.loginfo(
-            "Publishing fake track inputs to %s and %s at %.2f Hz (source odom: %s)",
+            "%s Publishing fake track inputs to %s and %s at %.2f Hz (source odom: %s)",
+            TRACK_TAG,
             args.yolo_topic,
             args.odom_topic,
             args.rate,
@@ -154,36 +156,41 @@ def main():
         )
 
     end_time = rospy.Time.now().to_sec() + float(args.duration) if float(args.duration) > 0.0 else None
-    loop_rate_hz = max(1.0, float(max(args.trigger_rate, args.rate if args.fake_inputs else 0.0)))
+    loop_rate_hz = max(1.0, float(args.rate if args.fake_inputs else 10.0))
     loop_rate = rospy.Rate(loop_rate_hz)
     trigger_period = 1.0 / max(1.0, float(args.trigger_rate))
     fake_period = 1.0 / max(1.0, float(args.rate))
-    last_trigger = 0.0
     last_fake = 0.0
+
+    trigger_msg = build_trigger_msg()
+    for _ in range(max(1, int(args.trigger_repeat))):
+        if rospy.is_shutdown():
+            return
+        trigger_msg.header.stamp = rospy.Time.now()
+        trigger_pub.publish(trigger_msg)
+        rospy.sleep(trigger_period)
 
     while not rospy.is_shutdown():
         now = rospy.Time.now().to_sec()
         if end_time is not None and now >= end_time:
             break
 
-        if now - last_trigger >= trigger_period:
-            msg = build_trigger_msg()
-            msg.header.stamp = rospy.Time.now()
-            trigger_pub.publish(msg)
-            last_trigger = now
-
         if args.fake_inputs and now - last_fake >= fake_period:
-            yolo_msg = BoundingBoxes()
-            yolo_msg.header.stamp = rospy.Time.now()
-            yolo_msg.header.frame_id = args.frame_id
-            yolo_msg.image_header = yolo_msg.header
-            yolo_msg.bounding_boxes = [build_bbox(args.width, args.height, args.class_name, args.prob)]
-
             if use_static_odom:
                 odom_msg = copy.deepcopy(static_odom)
             else:
                 odom_msg = copy.deepcopy(odom_cache.latest)
             odom_msg.header.stamp = rospy.Time.now()
+            if args.frame_id:
+                odom_msg.header.frame_id = args.frame_id
+
+            yolo_msg = build_target_odom(
+                odom_msg,
+                args.frame_id,
+                args.target_offset_x,
+                args.target_offset_y,
+                args.target_offset_z,
+            )
 
             yolo_pub.publish(yolo_msg)
             odom_pub.publish(odom_msg)

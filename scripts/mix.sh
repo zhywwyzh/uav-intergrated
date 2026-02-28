@@ -12,13 +12,14 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TMP_DIR="$PROJECT_ROOT/tmp"
 mkdir -p "$TMP_DIR"
 
-echo "=== Main Control Script Starting (Direct-trigger mode) ==="
+echo "=== Main Control Script Starting (Preempt-trigger mode) ==="
 echo ""
 
 # PID file paths
 EGO_RUN_PID_FILE="$TMP_DIR/run_in_sim.pid"
 TRACK_PID_FILE="$TMP_DIR/track_real.pid"
 PERCHING_PID_FILE="$TMP_DIR/perching.pid"
+ARBITER_PID_FILE="$TMP_DIR/task_trigger_arbiter.pid"
 
 # Startup script PID files
 START_TRACK_PID_FILE="$TMP_DIR/start_track.pid"
@@ -53,6 +54,17 @@ cleanup() {
         rm -f "$START_PERCH_PID_FILE"
     fi
 
+    if [ -f "$ARBITER_PID_FILE" ]; then
+        ARBITER_PID=$(cat "$ARBITER_PID_FILE" 2>/dev/null)
+        if [ ! -z "$ARBITER_PID" ] && kill -0 "$ARBITER_PID" 2>/dev/null; then
+            echo "  Terminating task_trigger_arbiter.py (PID: $ARBITER_PID)"
+            kill -TERM "$ARBITER_PID" 2>/dev/null
+            sleep 0.2
+            kill -KILL "$ARBITER_PID" 2>/dev/null
+        fi
+        rm -f "$ARBITER_PID_FILE"
+    fi
+
     # call stop wrappers for robust ROS cleanup
     if [ -f "$SCRIPT_DIR/stop_track.sh" ]; then
         "$SCRIPT_DIR/stop_track.sh" >/dev/null 2>&1 || true
@@ -69,11 +81,13 @@ cleanup() {
     pkill -f "mission_fsm run_in_sim.xml" 2>/dev/null
     pkill -f "planning real_external.launch" 2>/dev/null
     pkill -f "perching.launch" 2>/dev/null
+    pkill -f "task_trigger_arbiter.py" 2>/dev/null
 
     rm -f \
         "$EGO_RUN_PID_FILE" \
         "$TRACK_PID_FILE" \
-        "$PERCHING_PID_FILE"
+        "$PERCHING_PID_FILE" \
+        "$ARBITER_PID_FILE"
 
     echo "=== Cleanup completed, script exiting ==="
     exit 0
@@ -171,14 +185,16 @@ ensure_track_process_running() {
 
 start_perch() {
     echo "Starting perch..."
+    local perch_cmd_topic="${PERCH_POSITION_CMD_TOPIC:-/drone_0_planning/pos_cmd}"
 
     cd "$PROJECT_ROOT/Fast-Perching" || return 1
     source devel/setup.sh
 
     rm -f "$PERCHING_PID_FILE"
 
-    echo "Launching perching.launch..."
-    roslaunch planning perching.launch &
+    echo "Launching perching.launch (cmd topic: $perch_cmd_topic)..."
+    roslaunch planning perching.launch \
+        position_cmd_topic:="$perch_cmd_topic" &
     PERCHING_PID=$!
     echo $PERCHING_PID > "$PERCHING_PID_FILE"
     echo "  perching.launch started (PID: $PERCHING_PID)"
@@ -200,13 +216,47 @@ ensure_perch_process_running() {
     start_perch
 }
 
+start_trigger_arbiter() {
+    local arbiter_pid=""
+    if [ -f "$ARBITER_PID_FILE" ]; then
+        arbiter_pid=$(cat "$ARBITER_PID_FILE" 2>/dev/null)
+    fi
+    if [ ! -z "$arbiter_pid" ] && kill -0 "$arbiter_pid" 2>/dev/null; then
+        return 0
+    fi
+
+    echo "Starting task trigger arbiter..."
+    cd "$PROJECT_ROOT/ego-planner" || return 1
+    source devel/setup.sh
+    cd "$PROJECT_ROOT" || return 1
+
+    rm -f "$ARBITER_PID_FILE"
+    python3 "$PROJECT_ROOT/utils/task_trigger_arbiter.py" &
+    arbiter_pid=$!
+    echo "$arbiter_pid" > "$ARBITER_PID_FILE"
+    echo "  task_trigger_arbiter.py started (PID: $arbiter_pid)"
+}
+
+ensure_trigger_arbiter_running() {
+    local arbiter_pid=""
+    if [ -f "$ARBITER_PID_FILE" ]; then
+        arbiter_pid=$(cat "$ARBITER_PID_FILE" 2>/dev/null)
+    fi
+    if [ ! -z "$arbiter_pid" ] && kill -0 "$arbiter_pid" 2>/dev/null; then
+        return 0
+    fi
+    echo "Task trigger arbiter is not running, restarting..."
+    start_trigger_arbiter
+}
+
 echo "1. Cleaning stale PID files..."
 rm -f \
     "$START_TRACK_PID_FILE" \
     "$START_PERCH_PID_FILE" \
     "$TRACK_PID_FILE" \
     "$EGO_RUN_PID_FILE" \
-    "$PERCHING_PID_FILE"
+    "$PERCHING_PID_FILE" \
+    "$ARBITER_PID_FILE"
 
 echo "2. Starting ego mapping..."
 start_ego_mapping
@@ -220,8 +270,12 @@ echo "4. Starting perching runtime (standby)..."
 start_perch
 sleep 1
 
+echo "5. Starting trigger arbiter (preempt dispatcher)..."
+start_trigger_arbiter
+sleep 1
+
 echo ""
-echo "=== All runtimes are up (direct trigger dispatcher) ==="
+echo "=== All runtimes are up (preempt trigger dispatcher) ==="
 echo "Use tools/trigger_*.py to trigger ego/track/perch directly."
 echo "Press Ctrl+C to stop all."
 echo ""
@@ -230,5 +284,6 @@ while true; do
     ensure_ego_mapping_running
     ensure_track_process_running
     ensure_perch_process_running
+    ensure_trigger_arbiter_running
     sleep 1
 done

@@ -1,15 +1,21 @@
 #include <geometry_msgs/PoseStamped.h>
 #include <nav_msgs/Odometry.h>
 #include <nodelet/nodelet.h>
+#include <quadrotor_msgs/PositionCommand.h>
 #include <ros/package.h>
 #include <ros/ros.h>
 #include <std_msgs/Empty.h>
 #include <traj_opt/traj_opt.h>
 
+#include <cmath>
 #include <Eigen/Core>
 #include <atomic>
 #include <thread>
 #include <vis_utils/vis_utils.hpp>
+
+#ifndef PERCH_WARN
+#define PERCH_WARN(fmt, ...) ROS_WARN("\033[35m[PERCH]\033[0m " fmt, ##__VA_ARGS__)
+#endif
 
 namespace planning {
 
@@ -18,8 +24,9 @@ Eigen::IOFormat CommaInitFmt(Eigen::StreamPrecision, Eigen::DontAlignCols, ", ",
 class Nodelet : public nodelet::Nodelet {
  private:
   std::thread initThread_;
-  ros::Subscriber triger_sub_;
+  ros::Subscriber triger_sub_, preempt_sub_;
   ros::Timer plan_timer_;
+  ros::Publisher pos_cmd_pub_;
 
   std::shared_ptr<vis_utils::VisUtils> visPtr_;
   std::shared_ptr<traj_opt::TrajOpt> trajOptPtr_;
@@ -43,6 +50,7 @@ class Nodelet : public nodelet::Nodelet {
   Trajectory traj_poly_;
   ros::Time replan_stamp_;
   int traj_id_ = 0;
+  double last_yaw_ = 0.0;
   bool wait_hover_ = true;
   bool force_hover_ = true;
 
@@ -52,10 +60,48 @@ class Nodelet : public nodelet::Nodelet {
 
   void triger_callback(const geometry_msgs::PoseStampedConstPtr& msgPtr) {
     goal_ << msgPtr->pose.position.x, msgPtr->pose.position.y, 1.0;
+    ++traj_id_;
     triger_received_ = true;
+    ROS_INFO("\033[35m[PERCH]\033[0m Trigger received: x=%.2f y=%.2f z=%.2f",
+             msgPtr->pose.position.x, msgPtr->pose.position.y, msgPtr->pose.position.z);
+  }
+
+  void preempt_callback(const std_msgs::Empty::ConstPtr& /*msgPtr*/) {
+    triger_received_ = false;
+    PERCH_WARN("Preempt received, interrupted current task.");
+  }
+
+  void publish_position_cmd(const Eigen::Vector3d& p, const Eigen::Vector3d& v, const Eigen::Vector3d& a) {
+    quadrotor_msgs::PositionCommand cmd;
+    cmd.header.stamp = ros::Time::now();
+    cmd.header.frame_id = "world";
+    cmd.trajectory_flag = quadrotor_msgs::PositionCommand::TRAJECTORY_STATUS_READY;
+    cmd.trajectory_id = traj_id_;
+
+    cmd.position.x = p.x();
+    cmd.position.y = p.y();
+    cmd.position.z = p.z();
+    cmd.velocity.x = v.x();
+    cmd.velocity.y = v.y();
+    cmd.velocity.z = v.z();
+    cmd.acceleration.x = a.x();
+    cmd.acceleration.y = a.y();
+    cmd.acceleration.z = a.z();
+
+    double yaw = last_yaw_;
+    if (v.head<2>().norm() > 1e-3) {
+      yaw = std::atan2(v.y(), v.x());
+    }
+    cmd.yaw = yaw;
+    cmd.yaw_dot = 0.0;
+
+    pos_cmd_pub_.publish(cmd);
+    last_yaw_ = yaw;
   }
 
   void debug_timer_callback(const ros::TimerEvent& event) {
+    if (!triger_received_) return;
+
     Eigen::MatrixXd iniState;
     iniState.setZero(3, 4);
     bool generate_new_traj_success = false;
@@ -143,88 +189,19 @@ class Nodelet : public nodelet::Nodelet {
     Eigen::Quaterniond q_last;
     double max_omega = 0;
 
-    if (!triger_received_) {
-      double t_last = traj.getTotalDuration();
-      ros::Duration(dt).sleep();
-      // drone
-      Eigen::Vector3d p = traj.getPos(t_last);
-      Eigen::Vector3d a = traj.getAcc(t_last);
-      Eigen::Vector3d j = traj.getJer(t_last);
-      Eigen::Vector3d g(0, 0, -9.8);
-      Eigen::Vector3d thrust = a - g;
-
-      // std::cout << p.x() << " , " << p.z() << " , ";
-
-      Eigen::Vector3d zb = thrust.normalized();
-      {
-        // double a = zb.x();
-        // double b = zb.y();
-        // double c = zb.z();
-        Eigen::Vector3d zb_dot = f_DN(thrust) * j;
-        double omega12 = zb_dot.norm();
-        // if (omega12 > 3.1) {
-        //   std::cout << "omega: " << omega12 << "rad/s  t: " << t << std::endl;
-        // }
-        if (omega12 > max_omega) {
-          max_omega = omega12;
-        }
-        // double a_dot = zb_dot.x();
-        // double b_dot = zb_dot.y();
-        // double omega3 = (b * a_dot - a * b_dot) / (1 + c);
-        // std::cout << "jer: " << j.transpose() << std::endl;
-        // std::cout << "omega12: " << zb_dot.norm() << std::endl;
-        // std::cout << "omega3: " << omega3 << std::endl;
-        // std::cout << thrust.x() << " , " << thrust.z() << " , ";
-        // double omega2 = zb_dot.x() - zb.x() * zb_dot.z() / (zb.z() + 1);
-        // std::cout << omega2 << std::endl;
-        // std::cout << zb_dot.norm() << std::endl;
-      }
-
-      Eigen::Quaterniond q;
-      bool no_singlarity = v2q(zb, q);
-      Eigen::MatrixXd R_dot = (q.toRotationMatrix() - q_last.toRotationMatrix()) / dt;
-      Eigen::MatrixXd omega_M = q.toRotationMatrix().transpose() * R_dot;
-      // std::cout << "omega_M: \n" << omega_M << std::endl;
-      Eigen::Vector3d omega_real;
-      omega_real.x() = -omega_M(1, 2);
-      omega_real.y() = omega_M(0, 2);
-      omega_real.z() = -omega_M(0, 1);
-      // std::cout << "omega_real: " << omega_real.transpose() << std::endl;
-      q_last = q;
-      if (no_singlarity) {
-        msg.pose.pose.position.x = p.x();
-        msg.pose.pose.position.y = p.y();
-        msg.pose.pose.position.z = p.z();
-        msg.pose.pose.orientation.w = q.w();
-        msg.pose.pose.orientation.x = q.x();
-        msg.pose.pose.orientation.y = q.y();
-        msg.pose.pose.orientation.z = q.z();
-        msg.header.stamp = ros::Time::now();
-        visPtr_->visualize_traj(traj, "traj");
-        visPtr_->pub_msg(msg, "odom");
-      }
-
-      msg.pose.pose.position.x = p.x();
-      msg.pose.pose.position.y = p.y();
-      msg.pose.pose.position.z = p.z();
-      msg.pose.pose.orientation.w = q.w();
-      msg.pose.pose.orientation.x = q.x();
-      msg.pose.pose.orientation.y = q.y();
-      msg.pose.pose.orientation.z = q.z();
-      msg.header.stamp = ros::Time::now();
-      visPtr_->pub_msg(msg, "odom");
-      return;
-    }
-
-
     for (double t = 0; t <= traj.getTotalDuration(); t += dt) {
+      if (!triger_received_) {
+        return;
+      }
       ros::Duration(dt).sleep();
       // drone
       Eigen::Vector3d p = traj.getPos(t);
+      Eigen::Vector3d v = traj.getVel(t);
       Eigen::Vector3d a = traj.getAcc(t);
       Eigen::Vector3d j = traj.getJer(t);
       Eigen::Vector3d g(0, 0, -9.8);
       Eigen::Vector3d thrust = a - g;
+      publish_position_cmd(p, v, a);
 
       // std::cout << p.x() << " , " << p.z() << " , ";
 
@@ -341,11 +318,13 @@ class Nodelet : public nodelet::Nodelet {
 
     visPtr_ = std::make_shared<vis_utils::VisUtils>(nh);
     trajOptPtr_ = std::make_shared<traj_opt::TrajOpt>(nh);
+    pos_cmd_pub_ = nh.advertise<quadrotor_msgs::PositionCommand>("position_cmd", 20);
 
     plan_timer_ = nh.createTimer(ros::Duration(1.0 / plan_hz_), &Nodelet::debug_timer_callback, this);
 
     triger_sub_ = nh.subscribe<geometry_msgs::PoseStamped>("triger", 10, &Nodelet::triger_callback, this, ros::TransportHints().tcpNoDelay());
-    ROS_WARN("Planning node initialized!");
+    preempt_sub_ = nh.subscribe<std_msgs::Empty>("preempt", 10, &Nodelet::preempt_callback, this, ros::TransportHints().tcpNoDelay());
+    PERCH_WARN("Planning node initialized!");
   }
 
  public:

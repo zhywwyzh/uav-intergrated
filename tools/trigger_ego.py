@@ -2,7 +2,7 @@
 """
 Trigger ego module directly:
 1) call planning service (/drone_0_ego_planner_node/planning/enable)
-2) publish one GoalSet to /goal_with_id_from_station
+2) publish one GoalSet trigger to /ego_trigger
 """
 
 import argparse
@@ -11,6 +11,8 @@ import rospy
 from geometry_msgs.msg import Point
 from quadrotor_msgs.msg import GoalSet
 from std_srvs.srv import SetBool
+
+EGO_TAG = "\033[32m[EGO]\033[0m"
 
 
 def topic_type_compatible(topic_name, expected_type):
@@ -53,9 +55,9 @@ def build_goalset(x, y, z, yaw, look_forward):
 def main():
     parser = argparse.ArgumentParser(description="Enable/disable ego planning and publish GoalSet")
     parser.add_argument("--planning-service", default="/drone_0_ego_planner_node/planning/enable")
-    parser.add_argument("--goal-topic", default="/goal_with_id_from_station")
+    parser.add_argument("--goal-topic", default="/ego_trigger")
     parser.add_argument("--goal-delay", type=float, default=0.3)
-    parser.add_argument("--x", type=float, default=0.0)
+    parser.add_argument("--x", type=float, default=5.0)
     parser.add_argument("--y", type=float, default=0.0)
     parser.add_argument("--z", type=float, default=1.0)
     parser.add_argument("--yaw", type=float, default=0.0)
@@ -73,6 +75,7 @@ def main():
     rospy.sleep(0.3)
 
     planning_target = not args.disable_planning
+    rospy.loginfo("%s Trigger requested, planning_target=%s", EGO_TAG, planning_target)
     try:
         rospy.wait_for_service(args.planning_service, timeout=2.0)
         set_planning = rospy.ServiceProxy(args.planning_service, SetBool)
@@ -92,7 +95,8 @@ def main():
     goal_msg = build_goalset(args.x, args.y, args.z, args.yaw, args.look_forward)
     goal_pub.publish(goal_msg)
     rospy.loginfo(
-        "Published GoalSet to %s: (%.3f, %.3f, %.3f), yaw=%.3f, look_forward=%s",
+        "%s Published GoalSet to %s: (%.3f, %.3f, %.3f), yaw=%.3f, look_forward=%s",
+        EGO_TAG,
         args.goal_topic,
         goal_msg.goal[0].x,
         goal_msg.goal[0].y,

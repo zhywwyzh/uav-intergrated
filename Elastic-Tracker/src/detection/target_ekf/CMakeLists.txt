@@ -39,3 +39,15 @@ target_link_libraries(target_ekf_node
 add_dependencies(target_ekf_node
   ${catkin_EXPORTED_TARGETS}
 )
+
+add_executable(target_ekf_sim_node
+ src/target_ekf_sim_node.cpp
+)
+
+target_link_libraries(target_ekf_sim_node
+   ${catkin_LIBRARIES}
+)
+
+add_dependencies(target_ekf_sim_node
+  ${catkin_EXPORTED_TARGETS}
+)

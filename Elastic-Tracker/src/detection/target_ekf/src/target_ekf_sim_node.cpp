@@ -26,7 +26,7 @@ void predict_state_callback(const ros::TimerEvent& event) {
   if (update_dt < 2.0) {
     ekfPtr_->predict();
   } else {
-    ROS_WARN("[ekf] too long time no update!");
+    // ROS_WARN("[ekf] too long time no update!");
     return;
   }
   // publish target odom

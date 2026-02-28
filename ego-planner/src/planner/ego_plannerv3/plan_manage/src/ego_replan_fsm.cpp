@@ -1,6 +1,10 @@
 
 #include <plan_manage/ego_replan_fsm.h>
 
+#ifndef EGO_WARN
+#define EGO_WARN(fmt, ...) ROS_WARN("\033[32m[EGO]\033[0m " fmt, ##__VA_ARGS__)
+#endif
+
 namespace ego_planner
 {
   void EGOReplanFSM::init(ros::NodeHandle &nh)
@@ -146,7 +150,7 @@ namespace ego_planner
         }
         else
         {
-          ROS_WARN("Failed to generate the first trajectory, keep trying");
+          EGO_WARN("Failed to generate the first trajectory, keep trying");
           changeFSMExecState(SEQUENTIAL_START, "EGOFSM"); // "changeFSMExecState" must be called each time planned
         }
       }
@@ -157,7 +161,7 @@ namespace ego_planner
     case GEN_NEW_TRAJ:
     {
       bool success = planFromGlobalTraj(10); // zx-todo
-      ROS_WARN("GEN_NEW_TRAJ!: %d", success);
+      EGO_WARN("GEN_NEW_TRAJ!: %d", success);
 
       if (success)
       {
@@ -594,7 +598,7 @@ namespace ego_planner
           double allowed_dist = planner_manager_->getSwarmClearance() + planner_manager_->traj_.swarm_traj.at(id).des_clearance;
           if (dist < allowed_dist * 0.9) // allow some small error
           {
-            ROS_WARN("swarm distance between drone %d (traj_id:%d, t:%f) and drone %d (traj_id:%d, t:%f) is %f, too close!",
+            EGO_WARN("swarm distance between drone %d (traj_id:%d, t:%f) and drone %d (traj_id:%d, t:%f) is %f, too close!",
                      planner_manager_->pp_.drone_id,  traj->traj_id, t, (int)id, planner_manager_->traj_.swarm_traj.at(id).traj_id, t_X, dist);
             dangerous = true;
           }
@@ -604,7 +608,7 @@ namespace ego_planner
       if (dangerous)
       {
         if (t_cur < 0.01)
-          ROS_WARN("Find collision immediately after planning a safe traj?");
+          EGO_WARN("Find collision immediately after planning a safe traj?");
 
         /* Handle the collided case immediately */
         cout << "plan_ret_stat_.ret=" << plan_ret_stat_.ret << endl;
@@ -639,7 +643,7 @@ namespace ego_planner
               {
                 if (!flag_wait_crash_rec_)
                 {
-                  ROS_WARN("Emergency stop! time=%f, occ=[%f %f %f]", t - t_cur, p(0), p(1), p(2));
+                  EGO_WARN("Emergency stop! time=%f, occ=[%f %f %f]", t - t_cur, p(0), p(1), p(2));
                   changeFSMExecState(EMERGENCY_STOP, "SAFETY");
                 }
               }
@@ -647,7 +651,7 @@ namespace ego_planner
           }
           else if (!flag_wait_crash_rec_)
           {
-            ROS_WARN("current traj in collision, replan.");
+            EGO_WARN("current traj in collision, replan.");
             changeFSMExecState(REPLAN_TRAJ, "SAFETY");
           }
           else
@@ -689,7 +693,7 @@ namespace ego_planner
               Eigen::Vector3d escape_to = map->cur_->getGridCenter(odom_pos_ + Eigen::Vector3d(reso * dx, reso * dy, reso * dz));
               if (planner_manager_->OnePieceTrajGen(odom_pos_, escape_to))
               {
-                ROS_WARN("CrashRecovery: from (%f, %f, %f) to (%f, %f, %f)", odom_pos_(0), odom_pos_(1), odom_pos_(2), escape_to(0), escape_to(1), escape_to(2));
+                EGO_WARN("CrashRecovery: from (%f, %f, %f) to (%f, %f, %f)", odom_pos_(0), odom_pos_(1), odom_pos_(2), escape_to(0), escape_to(1), escape_to(2));
                 auto lc_traj = planner_manager_->traj_.local_traj;
                 traj_server_.setTrajectory(lc_traj.traj, lc_traj.start_time);
                 traj_utils::MINCOTraj MINCO_msg;
@@ -707,9 +711,9 @@ namespace ego_planner
     ros::Time t_s = ros::Time::now();
 
     planner_manager_->computePlanningParams(planner_manager_->pp_.max_vel_);
-    ROS_WARN("Map Lock try");
+    EGO_WARN("Map Lock try");
     planner_manager_->map_->cur_->LockCopyToOutputAllMap(true); // to avoid map change during planning
-    ROS_WARN("Map Lock done");
+    EGO_WARN("Map Lock done");
     PLAN_RET plan_success =
         planner_manager_->reboundReplan(
             start_pt_, start_vel_, start_acc_, start_jerk_,
@@ -718,7 +722,7 @@ namespace ego_planner
             flag_random_init, pathes, touch_goal_);
     planner_manager_->map_->cur_->LockCopyToOutputAllMap(false); // allow map change
 
-    ROS_WARN("Map Use=%d", planner_manager_->map_->getMapUse());
+    EGO_WARN("Map Use=%d", planner_manager_->map_->getMapUse());
 
     if (plan_success == PLAN_RET::SUCCESS)
     {
@@ -916,7 +920,7 @@ namespace ego_planner
     //     // bool new_goal_clear = true;
     //     if (planner_manager_->grid_map_->getInflateOccupancy(pt) > 0) // make final_goal_ collided deliberately so that following codes will handle it.
     //     {
-    //       ROS_WARN("Move final_goal_ from [%f %f %f] to [%f %f %f].", final_goal_(0), final_goal_(1), final_goal_(2), pt(0), pt(1), pt(2));
+    //       EGO_WARN("Move final_goal_ from [%f %f %f] to [%f %f %f].", final_goal_(0), final_goal_(1), final_goal_(2), pt(0), pt(1), pt(2));
     //       final_goal_ = pt;
     //       break;
     //     }
@@ -965,7 +969,7 @@ namespace ego_planner
         if (new_goal_clear)
         {
           final_goal_ = pt;
-          ROS_WARN("Current in-collision waypoint (%.3f, %.3f %.3f) has been modified to (%.3f, %.3f %.3f)",
+          EGO_WARN("Current in-collision waypoint (%.3f, %.3f %.3f) has been modified to (%.3f, %.3f %.3f)",
                    orig_goal(0), orig_goal(1), orig_goal(2), final_goal_(0), final_goal_(1), final_goal_(2));
           in_obs_goal_clear = true;
           flag_goal_modified = true;
@@ -983,7 +987,7 @@ namespace ego_planner
           if (map->getOcc(pt) <= 0)
           {
             final_goal_ = pt;
-            ROS_WARN("[Weak check]Current in-collision waypoint (%.3f, %.3f %.3f) has been modified to (%.3f, %.3f %.3f)",
+            EGO_WARN("[Weak check]Current in-collision waypoint (%.3f, %.3f %.3f) has been modified to (%.3f, %.3f %.3f)",
                      orig_goal(0), orig_goal(1), orig_goal(2), final_goal_(0), final_goal_(1), final_goal_(2));
             in_obs_goal_clear = true;
             flag_goal_modified = true;
@@ -1027,7 +1031,7 @@ namespace ego_planner
             if ((others_lc_goal - pt).norm() >= allowed_dist * 1.5)
             {
               final_goal_ = pt;
-              ROS_WARN("Current swarm-collision waypoint (%.3f, %.3f %.3f) has been modified to (%.3f, %.3f %.3f)",
+              EGO_WARN("Current swarm-collision waypoint (%.3f, %.3f %.3f) has been modified to (%.3f, %.3f %.3f)",
                        orig_goal(0), orig_goal(1), orig_goal(2), final_goal_(0), final_goal_(1), final_goal_(2));
               new_goal_clear = true;
               flag_goal_modified = true;
@@ -1060,7 +1064,7 @@ namespace ego_planner
     end_wp << msg->pose.position.x, msg->pose.position.y, 1.0;
 
     std::cout << "========================================================<<<<<<<<<<<<<<<<<<<<" << std::endl;
-    ROS_INFO("Received goal: %f, %f, %f", end_wp.x(), end_wp.y(), end_wp.z());
+    ROS_INFO("\033[32m[EGO]\033[0m Received goal: %f, %f, %f", end_wp.x(), end_wp.y(), end_wp.z());
 
     if (planNextWaypoint(end_wp))
     {
@@ -1070,7 +1074,7 @@ namespace ego_planner
 
   void EGOReplanFSM::aimCallback(const quadrotor_msgs::EgoGoalSetPtr &msg)
   {
-    ROS_INFO("[Ego]: Received goalID: %d, pos: %.1f, %.1f, %.1f, lookforward: %d, yaw: %.2f",
+    ROS_INFO("\033[32m[EGO]\033[0m Received goalID: %d, pos: %.1f, %.1f, %.1f, lookforward: %d, yaw: %.2f",
              msg->drone_id, msg->goal[0], msg->goal[1], msg->goal[2], (int)msg->look_forward, msg->yaw);
     if (msg->drone_id != planner_manager_->pp_.drone_id)
       return;
@@ -1160,7 +1164,7 @@ namespace ego_planner
   void EGOReplanFSM::triggerCallback(const geometry_msgs::PoseStampedPtr &msg)
   {
     have_trigger_ = true;
-    cout << "Triggered!" << endl;
+    ROS_INFO("\033[32m[EGO]\033[0m Triggered.");
   }
 
   void EGOReplanFSM::RecvBroadcastMINCOTrajCallback(const traj_utils::MINCOTrajConstPtr &msg)
@@ -1188,8 +1192,8 @@ namespace ego_planner
         planner_manager_->traj_.swarm_traj[recv_id].drone_id == (int)recv_id &&
         msg->start_time.toSec() - planner_manager_->traj_.swarm_traj[recv_id].start_time < 0)
     {
-      ROS_WARN("[egofsm] Received drone %d's trajectory out of order or duplicated, abandon it.", (int)recv_id);
-      ROS_WARN("Received time: %f, start_time %f, diff: %f", msg->start_time.toSec(), planner_manager_->traj_.swarm_traj[recv_id].start_time, msg->start_time.toSec() - planner_manager_->traj_.swarm_traj[recv_id].start_time);
+      EGO_WARN("[egofsm] Received drone %d's trajectory out of order or duplicated, abandon it.", (int)recv_id);
+      EGO_WARN("Received time: %f, start_time %f, diff: %f", msg->start_time.toSec(), planner_manager_->traj_.swarm_traj[recv_id].start_time, msg->start_time.toSec() - planner_manager_->traj_.swarm_traj[recv_id].start_time);
       return;
     }
 
@@ -1199,7 +1203,7 @@ namespace ego_planner
 
       if (abs((t_now - msg->start_time).toSec()) < 10.0) // 10 seconds offset, more likely to be caused by unsynced system time.
       {
-        ROS_WARN("Time stamp diff: Local - Remote Agent %d = %fs",
+        EGO_WARN("Time stamp diff: Local - Remote Agent %d = %fs",
                  msg->drone_id, (t_now - msg->start_time).toSec());
       }
       else
@@ -1224,7 +1228,7 @@ namespace ego_planner
 
     if (msg->start_time.toSec() < planner_manager_->traj_.swarm_traj[recv_id].start_time) // This must be called after buffer fill-up
     {
-      ROS_WARN("Old traj received, ignored.");
+      EGO_WARN("Old traj received, ignored.");
       return;
     }
 
@@ -1556,7 +1560,7 @@ namespace ego_planner
 
   void EGOReplanFSM::commandCallback(const std_msgs::Empty::ConstPtr& msg)
   {
-    ROS_WARN("Emergency stop command received");
+    EGO_WARN("Emergency stop command received");
 
     // 1) 标记强制停止，关闭自动 fail-safe 逻辑（防止自动重试移动）
     command_stop_ = true;
@@ -1574,12 +1578,12 @@ namespace ego_planner
       if (!callEmergencyStop(odom_pos_)) {
         ROS_ERROR("callEmergencyStop failed!");
       } else {
-        ROS_WARN("callEmergencyStop executed immediately.");
+        EGO_WARN("callEmergencyStop executed immediately.");
       }
     } else {
-      ROS_WARN("No odom available yet — EMERGENCY stop will be attempted when odom arrives.");
+      EGO_WARN("No odom available yet — EMERGENCY stop will be attempted when odom arrives.");
     }
-    ROS_WARN("Emergency stop command received");
+    EGO_WARN("Emergency stop command received");
     changeFSMExecState(COMMAND_STOP, "Command stop");
   }
 } // namespace ego_planner
