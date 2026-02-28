@@ -4,8 +4,9 @@ This project combines three previous projects from ZJU-FAST-Lab: ego-planner, El
 - `Elastic-Tracker` now supports `planning/real_external.launch`, which consumes:
   - odom topic (default: `/ekf/ekf_odom`)
   - yolo topic (default: `/yolov5trt/bboxes_pub`)
-  - global map topic (default: `/global_map`)
+  - local map topic (default: `/drone_0_ego_planner_node/grid_map/occupancy_inflate`)
 - Legacy simulator/CUDA packages are isolated with `CATKIN_IGNORE` and are not built in default Docker workflow.
+- `scripts/stop_*.sh` are lightweight wrappers now; heavy stop logic is implemented in `tools/stop_task_helper.py`.
 
 # 2. Standard Compilation
 **System used to test**: Ubuntu 20.04 with ros-noetic  
@@ -30,24 +31,27 @@ catkin_make
 ```
 > Grant bash files permissions
 ```
-chmod +x mix.sh
-chmod +x task_pub.sh
-chmod +x start_ego.sh
-chmod +x start_track.sh
-chmod +x start_track_car.sh
-chmod +x start_perch.sh
-chmod +x stop_ego.sh
-chmod +x stop_track.sh
-chmod +x stop_perch.sh
+chmod +x scripts/mix.sh
+chmod +x scripts/task_pub.sh
+chmod +x scripts/start_ego.sh
+chmod +x scripts/start_track.sh
+chmod +x scripts/start_perch.sh
+chmod +x scripts/stop_ego.sh
+chmod +x scripts/stop_track.sh
+chmod +x scripts/stop_perch.sh
 ```
 > Run the map and wait for `/task_id`
 ```
-./mix.sh
+./scripts/mix.sh
 ```
 ![map](./pic/map.jpeg)
 > Run task publisher
 ```
-./task_pub.sh
+./scripts/task_pub.sh
+```
+> (Optional) quick test publisher for task 2 track inputs
+```
+python3 tools/track_task2_pub_example.py --task-id 2
 ```
 # 3. About the Map
 If you want to change the map, please turn to `/ego-planner/src/planner/plan_manage/launch/map_generator.launch`. You can change the parameters of `mockamap_node` to get a different environment for simulation.
@@ -77,4 +81,4 @@ If you want to change the map, please turn to `/ego-planner/src/planner/plan_man
 <param name="obstacle_number" type="int" value="120"/>
 ```
 # 4. Existing Problems
-As for task 5, given that there's no obstacle avoidance program in Fast-Perching project, task 5 here can't avoid the obstacles in the map. 
+As for task 4, given that there's no obstacle avoidance program in Fast-Perching project, task 4 here can't avoid the obstacles in the map. 

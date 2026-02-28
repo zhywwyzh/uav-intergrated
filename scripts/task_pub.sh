@@ -1,5 +1,5 @@
 #!/bin/bash
-# task_pub.sh - Simplified ROS1 Task Publisher Script (only publishes task_id: 1-5)
+# task_pub.sh - Simplified ROS1 Task Publisher Script (only publishes task_id: 1-4)
 
 # Color definitions
 RED='\033[0;31m'
@@ -26,9 +26,8 @@ publish_task() {
     case $task_id in
         1) task_name="ego-plan";;
         2) task_name="track";;
-        3) task_name="track-car";;
-        4) task_name="land";;
-        5) task_name="perch";;
+        3) task_name="land";;
+        4) task_name="perch";;
     esac
     
     echo -e "${YELLOW}Publishing task_id=$task_id [$task_name]...${NC}"
@@ -53,9 +52,8 @@ show_menu() {
     echo -e "Select task_id to publish:"
     echo -e "  ${GREEN}1${NC} - Publish task_id=1 ${YELLOW}[ego-plan]${NC}"
     echo -e "  ${GREEN}2${NC} - Publish task_id=2 ${YELLOW}[track]${NC}"
-    echo -e "  ${GREEN}3${NC} - Publish task_id=3 ${YELLOW}[track-car]${NC}"
-    echo -e "  ${GREEN}4${NC} - Publish task_id=4 ${YELLOW}[land]${NC}"
-    echo -e "  ${GREEN}5${NC} - Publish task_id=5 ${YELLOW}[perch]${NC}"
+    echo -e "  ${GREEN}3${NC} - Publish task_id=3 ${YELLOW}[land]${NC}"
+    echo -e "  ${GREEN}4${NC} - Publish task_id=4 ${YELLOW}[perch]${NC}"
     echo -e "  ${RED}q${NC} - Exit program"
     echo -e "${BLUE}==========================================${NC}"
 }
@@ -69,7 +67,7 @@ main() {
         show_menu
         
         # Read user input
-        read -p "Select [1-5/q]: " choice
+        read -p "Select [1-4/q]: " choice
         
         case $choice in
             1)
@@ -84,16 +82,11 @@ main() {
                 ;;
             3)
                 if publish_task 3; then
-                    echo -e "${GREEN}✓ track-car task published${NC}"
+                    echo -e "${GREEN}✓ land task published${NC}"
                 fi
                 ;;
             4)
                 if publish_task 4; then
-                    echo -e "${GREEN}✓ land task published${NC}"
-                fi
-                ;;
-            5)
-                if publish_task 5; then
                     echo -e "${GREEN}✓ perch task published${NC}"
                 fi
                 ;;

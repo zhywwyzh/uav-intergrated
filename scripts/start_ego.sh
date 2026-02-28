@@ -1,16 +1,19 @@
 #!/bin/bash
 # Start ego node, get initialization parameters from temporary file
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+TMP_DIR="$PROJECT_ROOT/tmp"
+mkdir -p "$TMP_DIR"
+
 echo "=== Starting Ego Node ==="
 echo ""
 
 # PID file path
-RUN_IN_SIM_PID_FILE="/tmp/run_in_sim.pid"
-MAP_BRIDGE_PID_FILE="/tmp/map_generator.pid"
+RUN_IN_SIM_PID_FILE="$TMP_DIR/run_in_sim.pid"
 EGO_PLANNING_SERVICE="/drone_0_ego_planner_node/planning/enable"
 # Shared temporary file path
-POSITION_TMP_FILE="/tmp/drone_position.tmp"
-MAP_BRIDGE_STARTED=false
+POSITION_TMP_FILE="$TMP_DIR/drone_position.tmp"
 
 # Cleanup function
 cleanup() {
@@ -20,24 +23,14 @@ cleanup() {
     if [ -f "$RUN_IN_SIM_PID_FILE" ]; then
         RUN_IN_SIM_PID=$(cat "$RUN_IN_SIM_PID_FILE" 2>/dev/null)
         if [ ! -z "$RUN_IN_SIM_PID" ] && kill -0 "$RUN_IN_SIM_PID" 2>/dev/null; then
-            echo "  Terminating mission_fsm run_in_sim.xml (PID: $RUN_IN_SIM_PID)"
+            echo "  Terminating mission_fsm multidrone_sim.launch (PID: $RUN_IN_SIM_PID)"
             kill -TERM "$RUN_IN_SIM_PID" 2>/dev/null
             kill -KILL "$RUN_IN_SIM_PID" 2>/dev/null
         fi
         rm -f "$RUN_IN_SIM_PID_FILE"
     fi
 
-    if [ "$MAP_BRIDGE_STARTED" = true ] && [ -f "$MAP_BRIDGE_PID_FILE" ]; then
-        MAP_BRIDGE_PID=$(cat "$MAP_BRIDGE_PID_FILE" 2>/dev/null)
-        if [ ! -z "$MAP_BRIDGE_PID" ] && kill -0 "$MAP_BRIDGE_PID" 2>/dev/null; then
-            echo "  Terminating livox_map_bridge.launch (PID: $MAP_BRIDGE_PID)"
-            kill -TERM "$MAP_BRIDGE_PID" 2>/dev/null
-            sleep 0.5
-            kill -KILL "$MAP_BRIDGE_PID" 2>/dev/null
-        fi
-        rm -f "$MAP_BRIDGE_PID_FILE"
-    fi
-    
+    pkill -f "mission_fsm multidrone_sim.launch" 2>/dev/null
     pkill -f "mission_fsm run_in_sim.xml" 2>/dev/null
     
     echo "=== Cleanup completed, script exiting ==="
@@ -95,27 +88,13 @@ echo ""
 echo "2. Enabling planning via service..."
 
 # Enter ego-planner directory and launch
-cd ego-planner
+cd "$PROJECT_ROOT/ego-planner"
 source devel/setup.sh
-
-# Start Livox map bridge if not started yet
-if [ -f "$MAP_BRIDGE_PID_FILE" ]; then
-    MAP_BRIDGE_PID=$(cat "$MAP_BRIDGE_PID_FILE" 2>/dev/null)
-fi
-
-if [ -z "$MAP_BRIDGE_PID" ] || ! kill -0 "$MAP_BRIDGE_PID" 2>/dev/null; then
-    echo "  Starting livox_map_bridge.launch..."
-    roslaunch mission_fsm livox_map_bridge.launch &
-    MAP_BRIDGE_PID=$!
-    echo "$MAP_BRIDGE_PID" > "$MAP_BRIDGE_PID_FILE"
-    MAP_BRIDGE_STARTED=true
-    sleep 1
-fi
 
 for retry in $(seq 1 20); do
     if rosservice call "$EGO_PLANNING_SERVICE" "data: true" >/dev/null 2>&1; then
         echo "  Planning enabled on existing ego mapping node"
-        cd ..
+        cd "$PROJECT_ROOT"
         echo ""
         echo "=== ego-plan started ==="
         exit 0
@@ -123,30 +102,27 @@ for retry in $(seq 1 20); do
     sleep 0.2
 done
 
-echo "  Service $EGO_PLANNING_SERVICE not available, fallback to launching run_in_sim.xml"
+echo "  Service $EGO_PLANNING_SERVICE not available, fallback to launching multidrone_sim.launch"
 
 # Cleanup previous PID file
 rm -f "$RUN_IN_SIM_PID_FILE"
 
-# Launch mission_fsm run_in_sim.xml (EGO-Planner-v3)
-roslaunch mission_fsm run_in_sim.xml \
-    drone_id:=0 \
-    map_size_x:=40.0 \
-    map_size_y:=40.0 \
-    map_size_z:=3.0 \
-    init_x:="$INIT_X" \
-    init_y:="$INIT_Y" \
-    init_z:="$INIT_Z" \
-    odom_topic:=/visual_slam/odom \
-    cloud_topic:=/livox/lidar_register \
-    flight_type:=1 \
-    enable_planning:=true &
+# Launch mission_fsm multidrone_sim.launch
+roslaunch mission_fsm multidrone_sim.launch &
 RUN_IN_SIM_PID=$!
 
 echo $RUN_IN_SIM_PID > "$RUN_IN_SIM_PID_FILE"
-echo "  mission_fsm run_in_sim.xml started (PID: $RUN_IN_SIM_PID)"
+echo "  mission_fsm multidrone_sim.launch started (PID: $RUN_IN_SIM_PID)"
 
-cd ..
+for retry in $(seq 1 30); do
+    if rosservice call "$EGO_PLANNING_SERVICE" "data: true" >/dev/null 2>&1; then
+        echo "  Planning enabled on launched ego node"
+        break
+    fi
+    sleep 0.2
+done
+
+cd "$PROJECT_ROOT"
 
 echo ""
 echo "=== ego-plan started ==="

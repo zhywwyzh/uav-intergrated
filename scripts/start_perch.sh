@@ -1,14 +1,18 @@
 #!/bin/bash
 # Start ego node, get initialization parameters from temporary file - perching version
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+TMP_DIR="$PROJECT_ROOT/tmp"
+mkdir -p "$TMP_DIR"
+
 echo "=== Starting Perch Node ==="
 echo ""
 
 # PID file path
-PERCHING_PID_FILE="/tmp/perching.pid"
-MAP_BRIDGE_PID_FILE="/tmp/map_generator.pid"
+PERCHING_PID_FILE="$TMP_DIR/perching.pid"
 # Shared temporary file path
-POSITION_TMP_FILE="/tmp/drone_position.tmp"
+POSITION_TMP_FILE="$TMP_DIR/drone_position.tmp"
 
 # Cleanup function
 cleanup() {
@@ -33,24 +37,6 @@ cleanup() {
 
 # Register signal handlers
 trap cleanup SIGINT SIGTERM SIGQUIT
-
-ensure_map_bridge() {
-    local map_pid=""
-    if [ -f "$MAP_BRIDGE_PID_FILE" ]; then
-        map_pid=$(cat "$MAP_BRIDGE_PID_FILE" 2>/dev/null)
-    fi
-
-    if [ -z "$map_pid" ] || ! kill -0 "$map_pid" 2>/dev/null; then
-        echo "  Starting livox_map_bridge.launch for shared map topics..."
-        cd ego-planner || return 1
-        source devel/setup.sh
-        roslaunch mission_fsm livox_map_bridge.launch &
-        map_pid=$!
-        echo "$map_pid" > "$MAP_BRIDGE_PID_FILE"
-        cd ..
-        sleep 1
-    fi
-}
 
 # 1. Get initialization parameters from temporary file
 echo "1. Getting initialization parameters from temporary file..."
@@ -103,11 +89,8 @@ echo "  Position: x=$INIT_X, y=$INIT_Y, z=$INIT_Z"
 echo "  Orientation: yaw=$INIT_YAW rad"
 
 echo ""
-echo "1.5 Ensuring Livox map bridge is running..."
-ensure_map_bridge
-
 # Start new node
-cd Fast-Perching
+cd "$PROJECT_ROOT/Fast-Perching"
 source devel/setup.sh
 
 # Cleanup previous PID file
@@ -124,7 +107,7 @@ PERCHING_PID=$!
 echo $PERCHING_PID > "$PERCHING_PID_FILE"
 echo "  perching.launch started (PID: $PERCHING_PID)"
 
-cd ..
+cd "$PROJECT_ROOT"
 
 echo ""
 echo "=== Perching node started ==="

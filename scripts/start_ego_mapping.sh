@@ -1,14 +1,19 @@
 #!/bin/bash
 # Start ego local mapping module only (planning disabled)
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+TMP_DIR="$PROJECT_ROOT/tmp"
+mkdir -p "$TMP_DIR"
+
 echo "=== Starting Ego Mapping Only ==="
 echo ""
 
-RUN_IN_SIM_PID_FILE="/tmp/run_in_sim.pid"
-MAP_BRIDGE_PID_FILE="/tmp/map_generator.pid"
+RUN_IN_SIM_PID_FILE="$TMP_DIR/run_in_sim.pid"
+MAP_BRIDGE_PID_FILE="$TMP_DIR/map_generator.pid"
 EGO_PLANNING_SERVICE="/drone_0_ego_planner_node/planning/enable"
 
-cd ego-planner || exit 1
+cd "$PROJECT_ROOT/ego-planner" || exit 1
 source devel/setup.sh
 
 if [ -f "$MAP_BRIDGE_PID_FILE" ]; then
@@ -32,7 +37,7 @@ fi
 if [ ! -z "$RUN_PID" ] && kill -0 "$RUN_PID" 2>/dev/null; then
     echo "2. run_in_sim already running (PID: $RUN_PID), disabling planning..."
     rosservice call "$EGO_PLANNING_SERVICE" "data: false" >/dev/null 2>&1
-    cd ..
+    cd "$PROJECT_ROOT"
     echo ""
     echo "=== Ego Mapping Ready ==="
     exit 0
@@ -56,6 +61,6 @@ RUN_PID=$!
 echo "$RUN_PID" > "$RUN_IN_SIM_PID_FILE"
 echo "  run_in_sim mapping-only started (PID: $RUN_PID)"
 
-cd ..
+cd "$PROJECT_ROOT"
 echo ""
 echo "=== Ego Mapping Ready ==="

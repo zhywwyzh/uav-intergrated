@@ -1,7 +1,7 @@
 <launch>
   <arg name="odom_topic" default="/ekf/ekf_odom"/>
   <arg name="yolo_topic" default="/yolov5trt/bboxes_pub"/>
-  <arg name="global_map_topic" default="/drone_0_ego_planner_node/grid_map/occupancy_inflate"/>
+  <arg name="local_map_topic" default="/drone_0_ego_planner_node/grid_map/occupancy_inflate"/>
   <arg name="map_x_length" default="80.0"/>
   <arg name="map_y_length" default="80.0"/>
   <arg name="map_z_length" default="8.0"/>
@@ -27,7 +27,7 @@
     <param name="resolution" value="$(arg map_resolution)"/>
     <param name="inflate_size" value="$(arg inflate_size)"/>
     <param name="use_mask" value="true"/>
-    <remap from="~global_map" to="$(arg global_map_topic)"/>
+    <remap from="~global_map" to="$(arg local_map_topic)"/>
     <remap from="~target" to="/target_ekf_node/target_odom"/>
     <remap from="~gridmap_inflate" to="gridmap_inflate"/>
   </node>
