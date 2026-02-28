@@ -48,7 +48,7 @@ class Nodelet : public nodelet::Nodelet {
 
   int plan_hz_ = 10;
 
-  std::atomic_bool triger_received_ = ATOMIC_VAR_INIT(true);
+  std::atomic_bool triger_received_ = ATOMIC_VAR_INIT(false);
 
   void triger_callback(const geometry_msgs::PoseStampedConstPtr& msgPtr) {
     goal_ << msgPtr->pose.position.x, msgPtr->pose.position.y, 1.0;
@@ -85,15 +85,15 @@ class Nodelet : public nodelet::Nodelet {
     land_q.z() = axis.z() * sin(theta);
     land_q = target_q * land_q;
 
-    std::cout << "iniState: \n"
-              << iniState << std::endl;
-    std::cout << "target_p: " << target_p.transpose() << std::endl;
-    std::cout << "target_v: " << target_v.transpose() << std::endl;
-    std::cout << "land_q: "
-              << land_q.w() << ","
-              << land_q.x() << ","
-              << land_q.y() << ","
-              << land_q.z() << "," << std::endl;
+    // std::cout << "iniState: \n"
+    //           << iniState << std::endl;
+    // std::cout << "target_p: " << target_p.transpose() << std::endl;
+    // std::cout << "target_v: " << target_v.transpose() << std::endl;
+    // std::cout << "land_q: "
+    //           << land_q.w() << ","
+    //           << land_q.x() << ","
+    //           << land_q.y() << ","
+    //           << land_q.z() << "," << std::endl;
 
     generate_new_traj_success = trajOptPtr_->generate_traj(iniState, target_p, target_v, land_q, 10, traj);
     if (generate_new_traj_success) {
@@ -310,9 +310,9 @@ class Nodelet : public nodelet::Nodelet {
       }
     }
   
-    std::cout << "tailV: " << traj.getVel(traj.getTotalDuration()).transpose() << std::endl;
-    std::cout << "max thrust: " << traj.getMaxThrust() << std::endl;
-    std::cout << "max omega: " << max_omega << std::endl;
+    // std::cout << "tailV: " << traj.getVel(traj.getTotalDuration()).transpose() << std::endl;
+    // std::cout << "max thrust: " << traj.getMaxThrust() << std::endl;
+    // std::cout << "max omega: " << max_omega << std::endl;
 
     triger_received_ = false;
   }

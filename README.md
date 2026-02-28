@@ -40,18 +40,21 @@ chmod +x scripts/stop_ego.sh
 chmod +x scripts/stop_track.sh
 chmod +x scripts/stop_perch.sh
 ```
-> Run the map and wait for `/task_id`
+> Run all runtimes (ego + track + perch) in standby mode
 ```
 ./scripts/mix.sh
 ```
 ![map](./pic/map.jpeg)
-> Run task publisher
+> Trigger modules by direct topics/tools
 ```
 ./scripts/task_pub.sh
 ```
-> (Optional) quick test publisher for task 2 track inputs
+> (Optional) direct trigger examples
 ```
-python3 tools/track_task2_pub_example.py --task-id 2
+python3 tools/trigger_ego.py
+python3 tools/trigger_track.py --no-fake-inputs --duration 2
+python3 tools/trigger_track_land.py
+python3 tools/trigger_perch.py
 ```
 # 3. About the Map
 If you want to change the map, please turn to `/ego-planner/src/planner/plan_manage/launch/map_generator.launch`. You can change the parameters of `mockamap_node` to get a different environment for simulation.

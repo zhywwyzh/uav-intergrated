@@ -55,6 +55,8 @@ class Nodelet : public nodelet::Nodelet {
   int traj_id_ = 0;
   bool wait_hover_ = true;
   bool force_hover_ = true;
+  ros::Time last_trigger_stamp_;
+  double trigger_hold_sec_ = 2.0;
 
   nav_msgs::Odometry odom_msg_, target_msg_;
   quadrotor_msgs::OccMap3d map_msg_;
@@ -108,6 +110,7 @@ class Nodelet : public nodelet::Nodelet {
   void triger_callback(const geometry_msgs::PoseStampedConstPtr& msgPtr) {
     goal_ << msgPtr->pose.position.x, msgPtr->pose.position.y, 0.9;
     triger_received_ = true;
+    last_trigger_stamp_ = ros::Time::now();
   }
 
   void land_triger_callback(const geometry_msgs::PoseStampedConstPtr& msgPtr) {
@@ -145,6 +148,23 @@ class Nodelet : public nodelet::Nodelet {
     gridmap_lock_.clear();
   }
 
+  bool trigger_active() {
+    if (!triger_received_) {
+      return false;
+    }
+    if (trigger_hold_sec_ <= 0.0) {
+      return true;
+    }
+    if ((ros::Time::now() - last_trigger_stamp_).toSec() <= trigger_hold_sec_) {
+      return true;
+    }
+    triger_received_ = false;
+    land_triger_received_ = false;
+    wait_hover_ = true;
+    force_hover_ = true;
+    return false;
+  }
+
   // NOTE main callback
   void plan_timer_callback(const ros::TimerEvent& event) {
     heartbeat_pub_.publish(std_msgs::Empty());
@@ -166,7 +186,7 @@ class Nodelet : public nodelet::Nodelet {
                               odom_msg.pose.pose.orientation.x,
                               odom_msg.pose.pose.orientation.y,
                               odom_msg.pose.pose.orientation.z);
-    if (!triger_received_) {
+    if (!trigger_active()) {
       return;
     }
     if (!target_received_) {
@@ -444,7 +464,7 @@ class Nodelet : public nodelet::Nodelet {
     Eigen::Vector3d odom_v(odom_msg.twist.twist.linear.x,
                            odom_msg.twist.twist.linear.y,
                            odom_msg.twist.twist.linear.z);
-    if (!triger_received_) {
+    if (!trigger_active()) {
       return;
     }
     // NOTE force-hover: waiting for the speed of drone small enough
@@ -750,6 +770,7 @@ class Nodelet : public nodelet::Nodelet {
     nh.getParam("tolerance_d", tolerance_d_);
     nh.getParam("debug", debug_);
     nh.getParam("fake", fake_);
+    nh.param("trigger_hold_sec", trigger_hold_sec_, 2.0);
 
     gridmapPtr_ = std::make_shared<mapping::OccGridMap>();
     envPtr_ = std::make_shared<env::Env>(nh, gridmapPtr_);

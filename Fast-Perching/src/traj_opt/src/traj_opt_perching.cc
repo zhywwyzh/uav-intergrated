@@ -410,7 +410,7 @@ bool TrajOpt::generate_traj(const Eigen::MatrixXd& iniState,
 
   // std::cout << "innerloop costs: " << tictoc_innerloop_ * 1e-6 << "ms" << std::endl;
   // std::cout << "integral costs: " << tictoc_integral_ * 1e-6 << "ms" << std::endl;
-  std::cout << "optmization costs: " << (toc - tic).count() * 1e-6 << "ms" << std::endl;
+  // std::cout << "optmization costs: " << (toc - tic).count() * 1e-6 << "ms" << std::endl;
   // std::cout << "\033[32m>iter times: " << iter_times_ << "\033[0m" << std::endl;
   if (pause_debug_) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));

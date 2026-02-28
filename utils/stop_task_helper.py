@@ -209,50 +209,39 @@ def handle_ego(tmp_dir: str) -> None:
 
 def handle_track(tmp_dir: str) -> None:
     rospy.loginfo("=== Stopping Tracker Related Nodes and Clearing Topics ===")
-    save_position_snapshot(tmp_dir, ["/odom"])
+    save_position_snapshot(tmp_dir, ["/ekf/ekf_odom", "/odom"])
 
     kill_pid_file(os.path.join(tmp_dir, "track_real.pid"), "planning real_external.launch")
-    kill_pid_file(os.path.join(tmp_dir, "track_topic_bridge.pid"), "track topic bridge")
-    pkill_patterns(["planning real_external.launch", "track_topic_bridge.py"])
+    pkill_patterns(["planning real_external.launch"])
 
     kill_nodes(
         [
-            "/target/manager",
-            "/target/so3_quadrotor",
-            "/target/so3_controller",
-            "/target/mapping",
-            "/target/odom_visualization",
-            "/target/planning",
-            "/target/traj_server",
-            "/manager",
-            "/mapping",
-            "/mapping_vis",
-            "/odom_visualization",
-            "/target_ekf_node",
-            "/planning",
-            "/traj_server",
+            "/track/manager",
+            "/track/mapping",
+            "/track/mapping_vis",
+            "/track/target_ekf_node",
+            "/track/planning",
+            "/track/traj_server",
         ]
     )
 
-    publish_empty_path("/target/planning/traj")
-    publish_marker_delete("/target/odom_visualization/robot")
-    publish_marker_delete("/planning/visible_region")
-    publish_marker_array_delete("/odom_visualization/fov_visual")
-    publish_empty_path("/planning/astar")
-    publish_empty_path("/planning/traj")
+    publish_empty_path("/track/planning/traj")
+    publish_marker_delete("/track/planning/visible_region")
+    publish_marker_array_delete("/track/odom_visualization/fov_visual")
+    publish_empty_path("/track/planning/astar")
+    publish_empty_path("/track/planning/traj")
     rospy.loginfo("=== TRACK Stop Completed ===")
 
 
 def handle_perch(tmp_dir: str) -> None:
     rospy.loginfo("=== Stopping Perching Related Nodes and Saving Position Information ===")
-    save_position_snapshot(tmp_dir, ["/odom"])
+    save_position_snapshot(tmp_dir, ["/perch/planning/odom", "/odom"])
 
-    kill_nodes(["/odom_visualization", "/odom_visualization_plate", "/manager", "/planning"])
-    pkill_patterns(["nodelet"])
+    kill_nodes(["/perch/odom_visualization", "/perch/odom_visualization_plate", "/perch/manager", "/perch/planning"])
 
-    publish_marker_delete("/odom_visualization_plate/polygon")
-    publish_empty_path("/planning/traj")
-    publish_marker_array_delete("/odom_visualization/fov_visual")
+    publish_marker_delete("/perch/odom_visualization_plate/polygon")
+    publish_empty_path("/perch/planning/traj")
+    publish_marker_array_delete("/perch/odom_visualization/fov_visual")
     rospy.loginfo("=== PERCH Stop Completed ===")
 
 

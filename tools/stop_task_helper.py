@@ -212,8 +212,7 @@ def handle_track(tmp_dir: str) -> None:
     save_position_snapshot(tmp_dir, ["/odom"])
 
     kill_pid_file(os.path.join(tmp_dir, "track_real.pid"), "planning real_external.launch")
-    kill_pid_file(os.path.join(tmp_dir, "track_topic_bridge.pid"), "track topic bridge")
-    pkill_patterns(["planning real_external.launch", "track_topic_bridge.py"])
+    pkill_patterns(["planning real_external.launch"])
 
     kill_nodes(
         [
