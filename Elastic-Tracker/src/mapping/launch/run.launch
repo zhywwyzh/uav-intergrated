@@ -13,7 +13,7 @@
       <!-- camera parameters -->
       <rosparam command="load" file="$(find mapping)/config/D435.yaml" />
       <!-- remap topics -->
-      <remap from="~odom" to="/ekf/ekf_odom"/>
+      <remap from="~odom" to="/track_ekf/ekf_odom"/>
       <!-- <remap from="~odom" to="/vins_estimator/imu_propagate"/> -->
       <remap from="~depth" to="/camera/depth/image_rect_raw"/>
       <!-- <remap from="~odom" to="/msckf_vio/odometry"/>

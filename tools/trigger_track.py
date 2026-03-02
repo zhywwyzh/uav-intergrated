@@ -56,6 +56,16 @@ def build_target_odom(base_odom, frame_id, dx, dy, dz):
     msg.pose.pose.position.x += float(dx)
     msg.pose.pose.position.y += float(dy)
     msg.pose.pose.position.z += float(dz)
+    msg.pose.pose.orientation.x = 0.0
+    msg.pose.pose.orientation.y = 0.0
+    msg.pose.pose.orientation.z = 0.0
+    msg.pose.pose.orientation.w = 1.0
+    msg.twist.twist.linear.x = 0.0
+    msg.twist.twist.linear.y = 0.0
+    msg.twist.twist.linear.z = 0.0
+    msg.twist.twist.angular.x = 0.0
+    msg.twist.twist.angular.y = 0.0
+    msg.twist.twist.angular.z = 0.0
     return msg
 
 
@@ -80,7 +90,7 @@ def main():
     parser.set_defaults(fake_inputs=True)
 
     parser.add_argument("--yolo-topic", default="/target/odom")
-    parser.add_argument("--odom-topic", default="/ekf/ekf_odom")
+    parser.add_argument("--odom-topic", default="/track_ekf/ekf_odom")
     parser.add_argument("--source-odom-topic", default="/unity_odom")
     parser.add_argument("--source-odom-timeout", type=float, default=10.0)
     parser.add_argument("--fallback-static-odom", dest="fallback_static_odom", action="store_true")
@@ -122,6 +132,7 @@ def main():
     static_odom = Odometry()
     static_odom.header.frame_id = "world"
     static_odom.pose.pose.orientation.w = 1.0
+    fixed_target_odom = None
 
     if args.fake_inputs:
         start_wait = rospy.Time.now().to_sec()
@@ -137,6 +148,27 @@ def main():
                 rospy.logerr("Timeout waiting odom from %s", args.source_odom_topic)
                 return
             rospy.sleep(0.1)
+        if use_static_odom:
+            target_base = copy.deepcopy(static_odom)
+        else:
+            target_base = copy.deepcopy(odom_cache.latest)
+        if args.frame_id:
+            target_base.header.frame_id = args.frame_id
+        fixed_target_odom = build_target_odom(
+            target_base,
+            args.frame_id,
+            args.target_offset_x,
+            args.target_offset_y,
+            args.target_offset_z,
+        )
+        rospy.loginfo(
+            "%s Fixed absolute target set to (%.3f, %.3f, %.3f) in frame %s",
+            TRACK_TAG,
+            fixed_target_odom.pose.pose.position.x,
+            fixed_target_odom.pose.pose.position.y,
+            fixed_target_odom.pose.pose.position.z,
+            fixed_target_odom.header.frame_id,
+        )
 
     rospy.loginfo(
         "%s Publishing track trigger on %s (%d times at %.2f Hz)",
@@ -184,13 +216,8 @@ def main():
             if args.frame_id:
                 odom_msg.header.frame_id = args.frame_id
 
-            yolo_msg = build_target_odom(
-                odom_msg,
-                args.frame_id,
-                args.target_offset_x,
-                args.target_offset_y,
-                args.target_offset_z,
-            )
+            yolo_msg = copy.deepcopy(fixed_target_odom)
+            yolo_msg.header.stamp = rospy.Time.now()
 
             yolo_pub.publish(yolo_msg)
             odom_pub.publish(odom_msg)

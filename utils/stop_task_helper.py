@@ -209,7 +209,7 @@ def handle_ego(tmp_dir: str) -> None:
 
 def handle_track(tmp_dir: str) -> None:
     rospy.loginfo("=== Stopping Tracker Related Nodes and Clearing Topics ===")
-    save_position_snapshot(tmp_dir, ["/ekf/ekf_odom", "/odom"])
+    save_position_snapshot(tmp_dir, ["/track_ekf/ekf_odom", "/odom"])
 
     kill_pid_file(os.path.join(tmp_dir, "track_real.pid"), "planning real_external.launch")
     pkill_patterns(["planning real_external.launch"])

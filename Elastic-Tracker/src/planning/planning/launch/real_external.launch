@@ -1,6 +1,6 @@
 <launch>
   <arg name="module_ns" default="track"/>
-  <arg name="odom_topic" default="/ekf/ekf_odom"/>
+  <arg name="odom_topic" default="/track_ekf/ekf_odom"/>
   <arg name="yolo_topic" default="/target/odom"/>
   <arg name="local_map_topic" default="/drone_0_ego_planner_node/grid_map/occupancy_inflate"/>
   <arg name="trigger_topic" default="/track_trigger_internal"/>

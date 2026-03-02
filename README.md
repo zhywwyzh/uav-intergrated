@@ -2,8 +2,8 @@
 This project combines three previous projects from ZJU-FAST-Lab: ego-planner, Elastic-Tracker, Fast-Perching. By running a single bash file, you can run one of these projects in one unified simulation environment.
 # 1.1 External Runtime Mode (No Legacy Simulator)
 - `Elastic-Tracker` now supports `planning/real_external.launch`, which consumes:
-  - odom topic (default: `/ekf/ekf_odom`)
-  - yolo topic (default: `/yolov5trt/bboxes_pub`)
+  - odom topic (default: `/track_ekf/ekf_odom`)
+  - yolo topic (default: `/target/odom`)
   - local map topic (default: `/drone_0_ego_planner_node/grid_map/occupancy_inflate`)
 - Legacy simulator/CUDA packages are isolated with `CATKIN_IGNORE` and are not built in default Docker workflow.
 - `scripts/stop_*.sh` are lightweight wrappers now; heavy stop logic is implemented in `utils/stop_task_helper.py`.
