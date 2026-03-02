@@ -75,6 +75,10 @@ def resolve_odom_topic(preferred_topic):
     return preferred_topic
 
 
+def log_odom_topic_state(topic_name, label):
+    rospy.loginfo("%s %s: %s (subscribers=%d)", DYN_TRACK_TAG, label, topic_name, topic_subscriber_count(topic_name))
+
+
 def build_trigger_msg():
     msg = PoseStamped()
     msg.header.stamp = rospy.Time.now()
@@ -113,7 +117,10 @@ def main():
     parser.add_argument("--trigger-repeat", type=int, default=1)
 
     parser.add_argument("--target-topic", default="/target/odom")
-    parser.add_argument("--odom-topic", default="/track_ekf/ekf_odom")
+    parser.add_argument("--odom-topic", default="/ekf/ekf_odom")
+    parser.add_argument("--auto-resolve-odom-topic", dest="auto_resolve_odom_topic", action="store_true")
+    parser.add_argument("--no-auto-resolve-odom-topic", dest="auto_resolve_odom_topic", action="store_false")
+    parser.set_defaults(auto_resolve_odom_topic=False)
     parser.add_argument("--source-odom-topic", default="/unity_odom")
     parser.add_argument("--source-odom-timeout", type=float, default=10.0)
     parser.add_argument("--fallback-static-odom", dest="fallback_static_odom", action="store_true")
@@ -139,14 +146,24 @@ def main():
 
     rospy.init_node("dynamic_trigger_track", anonymous=True)
     rospy.loginfo("%s Trigger requested", DYN_TRACK_TAG)
-    resolved_odom_topic = resolve_odom_topic(args.odom_topic)
-    if resolved_odom_topic != args.odom_topic:
-        rospy.logwarn(
-            "Switch odom publish topic from %s to %s (has active subscribers).",
-            args.odom_topic,
-            resolved_odom_topic,
-        )
-        args.odom_topic = resolved_odom_topic
+    requested_odom_topic = args.odom_topic
+    resolved_odom_topic = requested_odom_topic
+    if args.auto_resolve_odom_topic:
+        resolved_odom_topic = resolve_odom_topic(requested_odom_topic)
+        if resolved_odom_topic != requested_odom_topic:
+            rospy.logwarn(
+                "Switch odom publish topic from %s to %s (has active subscribers).",
+                requested_odom_topic,
+                resolved_odom_topic,
+            )
+            rospy.logwarn(
+                "Also mirroring odom to requested topic %s to avoid startup race.",
+                requested_odom_topic,
+            )
+    args.odom_topic = resolved_odom_topic
+    log_odom_topic_state(requested_odom_topic, "requested odom topic")
+    if requested_odom_topic != args.odom_topic:
+        log_odom_topic_state(args.odom_topic, "resolved odom topic")
 
     checks = [
         topic_type_compatible(args.trigger_topic, "geometry_msgs/PoseStamped"),
@@ -160,6 +177,9 @@ def main():
     trigger_pub = rospy.Publisher(args.trigger_topic, PoseStamped, queue_size=10)
     target_pub = rospy.Publisher(args.target_topic, Odometry, queue_size=20)
     odom_pub = rospy.Publisher(args.odom_topic, Odometry, queue_size=20)
+    odom_pub_requested = None
+    if requested_odom_topic != args.odom_topic:
+        odom_pub_requested = rospy.Publisher(requested_odom_topic, Odometry, queue_size=20)
 
     odom_cache = OdomCache()
     rospy.Subscriber(args.source_odom_topic, Odometry, odom_cache.callback, queue_size=20)
@@ -244,6 +264,8 @@ def main():
         target_msg.twist.twist.linear.y = vy
 
         odom_pub.publish(odom_msg)
+        if odom_pub_requested is not None:
+            odom_pub_requested.publish(odom_msg)
         target_pub.publish(target_msg)
         rate.sleep()
 

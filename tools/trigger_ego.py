@@ -61,7 +61,7 @@ def main():
     parser.add_argument("--y", type=float, default=0.0)
     parser.add_argument("--z", type=float, default=1.0)
     parser.add_argument("--yaw", type=float, default=0.0)
-    parser.add_argument("--look-forward", action="store_true")
+    parser.add_argument("--look-forward", action="store_false")
     parser.add_argument("--disable-planning", action="store_true")
     args = parser.parse_args()
 

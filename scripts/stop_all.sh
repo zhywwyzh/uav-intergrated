@@ -8,6 +8,72 @@ MIX_PID_FILE="$TMP_DIR/mix.pid"
 
 echo "=== stop_all.sh: stopping mix runtimes ==="
 
+pid_exists() {
+    local pid="$1"
+    [ -n "$pid" ] && [[ "$pid" =~ ^[0-9]+$ ]] && ps -p "$pid" >/dev/null 2>&1
+}
+
+pid_owner() {
+    local pid="$1"
+    ps -o user= -p "$pid" 2>/dev/null | awk '{print $1}'
+}
+
+signal_with_fallback() {
+    local signal_name="$1"
+    local target="$2"
+    if kill "-$signal_name" -- "$target" 2>/dev/null; then
+        return 0
+    fi
+    if command -v sudo >/dev/null 2>&1; then
+        if sudo -n kill "-$signal_name" -- "$target" 2>/dev/null; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+kill_pid_and_group() {
+    local pid="$1"
+    local label="$2"
+    if [ -z "$pid" ] || ! [[ "$pid" =~ ^[0-9]+$ ]]; then
+        return 0
+    fi
+    if ! pid_exists "$pid"; then
+        return 0
+    fi
+
+    local pgid=""
+    local owner=""
+    pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')
+    owner=$(pid_owner "$pid")
+    echo "  stopping $label (PID: $pid${pgid:+, PGID: $pgid})"
+
+    if ! signal_with_fallback "INT" "$pid"; then
+        if [ -n "$owner" ] && [ "$owner" != "$(id -un)" ]; then
+            echo "  warning: no permission to signal PID $pid (owner: $owner). Try: sudo ./scripts/stop_all.sh"
+        fi
+    fi
+    if [ -n "$pgid" ]; then
+        signal_with_fallback "INT" "-$pgid" || true
+    fi
+    sleep 0.5
+
+    if pid_exists "$pid"; then
+        signal_with_fallback "TERM" "$pid" || true
+        if [ -n "$pgid" ]; then
+            signal_with_fallback "TERM" "-$pgid" || true
+        fi
+        sleep 0.5
+    fi
+
+    if pid_exists "$pid"; then
+        signal_with_fallback "KILL" "$pid" || true
+        if [ -n "$pgid" ]; then
+            signal_with_fallback "KILL" "-$pgid" || true
+        fi
+    fi
+}
+
 kill_pid_file_if_alive() {
     local pid_file="$1"
     local label="$2"
@@ -16,12 +82,7 @@ kill_pid_file_if_alive() {
     fi
     local pid
     pid=$(cat "$pid_file" 2>/dev/null)
-    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-        echo "  stopping $label (PID: $pid)"
-        kill -TERM "$pid" 2>/dev/null || true
-        sleep 0.2
-        kill -KILL "$pid" 2>/dev/null || true
-    fi
+    kill_pid_and_group "$pid" "$label"
     rm -f "$pid_file"
 }
 
@@ -31,24 +92,11 @@ stop_mix_process() {
     if [ -f "$MIX_PID_FILE" ]; then
         local mix_pid
         mix_pid=$(cat "$MIX_PID_FILE" 2>/dev/null)
-        if [ -n "$mix_pid" ] && kill -0 "$mix_pid" 2>/dev/null; then
-            echo "  request mix shutdown (SIGINT), PID: $mix_pid"
-            kill -INT "$mix_pid" 2>/dev/null || true
-            sleep 0.8
-            if kill -0 "$mix_pid" 2>/dev/null; then
-                echo "  mix still alive, sending SIGTERM"
-                kill -TERM "$mix_pid" 2>/dev/null || true
-                sleep 0.5
-            fi
-            if kill -0 "$mix_pid" 2>/dev/null; then
-                echo "  mix still alive, sending SIGKILL"
-                kill -KILL "$mix_pid" 2>/dev/null || true
-            fi
-        fi
+        kill_pid_and_group "$mix_pid" "mix supervisor"
         rm -f "$MIX_PID_FILE"
     fi
 
-    # Fallback for sessions started without mix.pid.
+    # Fallback for sessions started without mix.pid in this workspace.
     pkill -INT -f "$PROJECT_ROOT/scripts/mix.sh" 2>/dev/null || true
     pkill -INT -f "bash scripts/mix.sh" 2>/dev/null || true
     pkill -INT -f "sh scripts/mix.sh" 2>/dev/null || true
@@ -60,6 +108,13 @@ stop_mix_process() {
     pkill -KILL -f "$PROJECT_ROOT/scripts/mix.sh" 2>/dev/null || true
     pkill -KILL -f "bash scripts/mix.sh" 2>/dev/null || true
     pkill -KILL -f "sh scripts/mix.sh" 2>/dev/null || true
+
+    # Cross-workspace fallback: stop any remaining */scripts/mix.sh process group.
+    local mix_pids=()
+    mapfile -t mix_pids < <(pgrep -f '(^| )bash +scripts/mix\.sh($| )|(^| )sh +scripts/mix\.sh($| )|/scripts/mix\.sh($| )' 2>/dev/null || true)
+    for pid in "${mix_pids[@]}"; do
+        kill_pid_and_group "$pid" "cross-workspace mix.sh"
+    done
 }
 
 run_stop_helper() {

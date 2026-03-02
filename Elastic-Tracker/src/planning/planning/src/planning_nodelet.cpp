@@ -10,6 +10,7 @@
 #include <std_msgs/Empty.h>
 #include <traj_opt/traj_opt.h>
 
+#include <cmath>
 #include <Eigen/Core>
 #include <atomic>
 #include <env/env.hpp>
@@ -61,6 +62,8 @@ class Nodelet : public nodelet::Nodelet {
   bool force_hover_ = true;
   ros::Time last_trigger_stamp_;
   double trigger_hold_sec_ = 2.0;
+  double force_hover_speed_threshold_ = 0.1;
+  double force_hover_timeout_sec_ = 2.0;
 
   nav_msgs::Odometry odom_msg_, target_msg_;
   quadrotor_msgs::OccMap3d map_msg_;
@@ -182,10 +185,38 @@ class Nodelet : public nodelet::Nodelet {
     return false;
   }
 
+  bool should_release_force_hover(const ros::Time& now, double speed) {
+    if (!force_hover_) {
+      return true;
+    }
+    if (speed <= force_hover_speed_threshold_) {
+      return true;
+    }
+    if (force_hover_timeout_sec_ > 0.0 &&
+        (now - last_trigger_stamp_).toSec() >= force_hover_timeout_sec_) {
+      TRACK_WARN("Force-hover timeout reached (v=%.2f > %.2f), continue planning.",
+                 speed, force_hover_speed_threshold_);
+      force_hover_ = false;
+      return true;
+    }
+    ROS_WARN_THROTTLE(1.0,
+                      "\033[34m[TRACK]\033[0m Waiting for low speed after trigger: v=%.2f (threshold=%.2f)",
+                      speed, force_hover_speed_threshold_);
+    return false;
+  }
+
   // NOTE main callback
   void plan_timer_callback(const ros::TimerEvent& event) {
     heartbeat_pub_.publish(std_msgs::Empty());
-    if (!odom_received_ || !map_received_) {
+    if (!trigger_active()) {
+      return;
+    }
+    if (!odom_received_) {
+      ROS_WARN_THROTTLE(1.0, "\033[34m[TRACK]\033[0m Trigger active but waiting for odom.");
+      return;
+    }
+    if (!map_received_) {
+      ROS_WARN_THROTTLE(1.0, "\033[34m[TRACK]\033[0m Trigger active but waiting for map (gridmap_inflate).");
       return;
     }
     // obtain state of odom
@@ -203,10 +234,10 @@ class Nodelet : public nodelet::Nodelet {
                               odom_msg.pose.pose.orientation.x,
                               odom_msg.pose.pose.orientation.y,
                               odom_msg.pose.pose.orientation.z);
-    if (!trigger_active()) {
-      return;
-    }
     if (!target_received_) {
+      ROS_WARN_THROTTLE(
+          1.0,
+          "\033[34m[TRACK]\033[0m Trigger active but waiting for target odom. Check /target/odom -> target_ekf -> target_ekf_node/target_odom.");
       return;
     }
     // NOTE obtain state of target
@@ -227,7 +258,7 @@ class Nodelet : public nodelet::Nodelet {
     target_q.z() = replanStateMsg_.target.pose.pose.orientation.z;
 
     // NOTE force-hover: waiting for the speed of drone small enough
-    if (force_hover_ && odom_v.norm() > 0.1) {
+    if (!should_release_force_hover(ros::Time::now(), odom_v.norm())) {
       return;
     }
 
@@ -467,7 +498,15 @@ class Nodelet : public nodelet::Nodelet {
 
   void fake_timer_callback(const ros::TimerEvent& event) {
     heartbeat_pub_.publish(std_msgs::Empty());
-    if (!odom_received_ || !map_received_) {
+    if (!trigger_active()) {
+      return;
+    }
+    if (!odom_received_) {
+      ROS_WARN_THROTTLE(1.0, "\033[34m[TRACK]\033[0m Trigger active but waiting for odom.");
+      return;
+    }
+    if (!map_received_) {
+      ROS_WARN_THROTTLE(1.0, "\033[34m[TRACK]\033[0m Trigger active but waiting for map (gridmap_inflate).");
       return;
     }
     // obtain state of odom
@@ -481,11 +520,8 @@ class Nodelet : public nodelet::Nodelet {
     Eigen::Vector3d odom_v(odom_msg.twist.twist.linear.x,
                            odom_msg.twist.twist.linear.y,
                            odom_msg.twist.twist.linear.z);
-    if (!trigger_active()) {
-      return;
-    }
     // NOTE force-hover: waiting for the speed of drone small enough
-    if (force_hover_ && odom_v.norm() > 0.1) {
+    if (!should_release_force_hover(ros::Time::now(), odom_v.norm())) {
       return;
     }
 
@@ -788,6 +824,8 @@ class Nodelet : public nodelet::Nodelet {
     nh.getParam("debug", debug_);
     nh.getParam("fake", fake_);
     nh.param("trigger_hold_sec", trigger_hold_sec_, -1.0);
+    nh.param("force_hover_speed_threshold", force_hover_speed_threshold_, 0.1);
+    nh.param("force_hover_timeout_sec", force_hover_timeout_sec_, 2.0);
 
     gridmapPtr_ = std::make_shared<mapping::OccGridMap>();
     envPtr_ = std::make_shared<env::Env>(nh, gridmapPtr_);
