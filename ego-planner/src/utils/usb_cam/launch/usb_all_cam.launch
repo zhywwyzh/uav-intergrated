@@ -1,0 +1,16 @@
+<launch>
+  <node name="usb_cam" pkg="usb_cam" type="usb_cam_node" output="screen" >
+      <rosparam command="load" file="$(find usb_cam)/config/usb_cam.yml"/>
+  </node>
+
+    <node name="usb_cam1" pkg="usb_cam" type="usb_cam_node" output="screen" >
+      <rosparam command="load" file="$(find usb_cam)/config/usb_cam1.yml"/>
+  </node>
+
+    <node name="usb_cam2" pkg="usb_cam" type="usb_cam_node" output="screen" >
+      <rosparam command="load" file="$(find usb_cam)/config/usb_cam2.yml"/>
+  </node>
+    <node name="usb_cam3" pkg="usb_cam" type="usb_cam_node" output="screen" >
+      <rosparam command="load" file="$(find usb_cam)/config/usb_cam3.yml"/>
+  </node>
+</launch>

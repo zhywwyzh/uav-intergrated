@@ -1,0 +1,6 @@
+<launch>
+  <node pkg="mockamap" type="mockamap_node" name="mockamap_node" output="screen">
+    <rosparam file="$(find planning)/config/mockamap.yaml"/>
+    <remap from="/mock_map" to="/global_map"/>
+  </node>
+</launch>

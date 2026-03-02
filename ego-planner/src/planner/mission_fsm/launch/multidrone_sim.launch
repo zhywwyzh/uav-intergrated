@@ -1,0 +1,109 @@
+<launch>
+    <arg name="map_size_x" value="200.0"/>
+    <arg name="map_size_y" value="200.0"/>
+    <arg name="map_size_z" value=" 3.0"/>
+    <arg name="init_x" value="1.0"/>
+    <arg name="init_y" value="0.0"/>
+    <arg name="init_z" value="1.0"/>
+    <arg name="odom_topic" value="visual_slam/odom" />
+    <arg name="enable_keyboard_ctrl" value="true" />
+    <arg name="enable_lidar_radius_filter" default="true" />
+    <arg name="lidar_input_topic" default="/livox/lidar" />
+    <arg name="lidar_output_topic" default="/livox/lidar_register" />
+    <arg name="lidar_odom_topic" default="/unity_odom" />
+    <arg name="lidar_self_filter_radius" default="0.5" />
+    <arg name="lidar_queue_size" default="5" />
+    <arg name="planner_cloud_topic"
+         value="$(eval arg('lidar_output_topic') if arg('enable_lidar_radius_filter') == 'true' else arg('lidar_input_topic'))" />
+
+
+    <!-- map -->
+    <!-- <node pkg ="map_generator" name ="random_forest" type ="random_forest" output = "screen">
+        <param name="map/x_size" value="50" />
+        <param name="map/y_size" value="30" />
+        <param name="map/z_size" value="3" />
+        <param name="init_x" value="$(arg init_x)" />
+        <param name="init_y" value="$(arg init_y)" />
+        <param name="init_z" value="$(arg init_z)" />
+        <param name="map/resolution" value="0.06"/>
+        <param name="ObstacleShape/seed" value="1"/>
+        <param name="map/obs_num" value="30"/>
+        <param name="ObstacleShape/lower_rad" value="0.2"/>
+        <param name="ObstacleShape/upper_rad" value="0.7"/>
+        <param name="ObstacleShape/lower_hei" value="0.0"/>
+        <param name="ObstacleShape/upper_hei" value="5.0"/>
+        <param name="map/circle_num" value="0"/>
+        <param name="ObstacleShape/radius_l" value="1.0"/>
+        <param name="ObstacleShape/radius_h" value="0.5"/>
+        <param name="ObstacleShape/z_l" value="-0.5"/>
+        <param name="ObstacleShape/z_h" value="2.5"/>
+        <param name="ObstacleShape/theta" value="1.5"/>
+        <param name="pub_rate" value="1.0"/>
+        <param name="min_distance" value="0.0"/>
+    </node> -->
+
+    <!-- map generation 4-->
+    <!-- Using pyhton to generate map -->
+    <!-- <node pkg ="map_generator" name ="map_generator_easy" type ="map_generator_easy2.py" output = "screen" respawn="true" >
+        <remap from="~odometry"   to="$(arg odom_topic)"/>
+        <param name="map/x_size"     value="$(arg map_size_x)" />
+        <param name="map/y_size"     value="$(arg map_size_y)" />
+        <param name="map/z_size"     value="$(arg map_size_z)" />
+        <param name="map/resolution" value="0.1"/>
+
+        <param name="map/add_floor" value="true"/>
+        <param name="map/add_ceiling" value="false"/>
+
+        <param name="sensing/rate" value="1.0"/>
+    </node> -->
+
+    <!-- <arg name="map_name" value="$(find map_generator)/pcd/fy.pcd"/> -->
+    <!--    <arg name="map_name" value="$(find map_generator)/pcd/7_9_scans.pcd"/>-->
+    <!-- <node pkg="map_generator" name="map_pub" type="map_pub" output="screen" args="$(arg map_name)">
+        <param name="add_boundary" value="0"/>
+        <param name="add_boundary2" value="0"/>
+        <param name="is_bridge" value="0"/>
+        <param name="downsample_res" value="0.1"/>
+        <param name="map_offset_x" value="0.0"/>
+        <param name="map_offset_y" value="0.0"/>
+        <param name="map_offset_z" value="0.0"/>
+    </node> -->
+
+    <!-- <node name="map_display" pkg= "map_generator" type="map_display.py" output="screen" /> -->
+
+    <node if="$(arg enable_lidar_radius_filter)"
+          pkg="mission_fsm"
+          type="lidar_position_filter_node"
+          name="lidar_position_filter_node"
+          output="screen">
+        <param name="input_topic" value="$(arg lidar_input_topic)" />
+        <param name="output_topic" value="$(arg lidar_output_topic)" />
+        <param name="odom_topic" value="$(arg lidar_odom_topic)" />
+        <param name="filter_radius" value="$(arg lidar_self_filter_radius)" />
+        <param name="queue_size" value="$(arg lidar_queue_size)" />
+    </node>
+
+    <include file="$(find mission_fsm)/launch/run_in_sim.xml">
+        <arg name="drone_id" value="0"/>
+        <!-- <arg name="init_x" value="1.0" />
+        <arg name="init_y" value="0.0" />
+        <arg name="init_z" value="1.0" /> -->
+        <!-- <arg name="init_x" value="1.22" />
+        <arg name="init_y" value="7.9" />
+        <arg name="init_z" value="1.6" /> -->
+        <arg name="init_x" value="0" />
+        <arg name="init_y" value="0" />
+        <arg name="init_z" value="1.0" />
+        <arg name="map_size_x" value="$(arg map_size_x)"/>
+        <arg name="map_size_y" value="$(arg map_size_y)"/>
+        <arg name="map_size_z" value="$(arg map_size_z)"/>
+        <arg name="odom_topic" value="$(arg odom_topic)"/>
+        <arg name="cloud_topic" value="$(arg planner_cloud_topic)"/>
+
+        <!-- MANUAL_TARGET  = 1, // Set aim in rviz
+             EXPLORE_TARGET = 2, // Get aim from Exploration
+             PRESET_TARGET  = 3, // Get preset aim from launch file -->
+        <arg name="flight_type" value="2"/>
+    </include>
+
+</launch>

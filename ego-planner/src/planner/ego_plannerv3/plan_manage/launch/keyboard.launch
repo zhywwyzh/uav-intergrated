@@ -1,0 +1,20 @@
+<launch>
+  <arg name="enable_keyboard_ctrl" value="true" />
+
+  <group if="$(arg enable_keyboard_ctrl)">
+    <node pkg="dynamic_planner" type="dynamic_planner_test_node" name="main_planner" output="screen">
+        <remap from="~dynamic_odom" to="/drone_0_visual_slam/odom"/>
+        <remap from="~joy" to="/joy_main"/>
+
+        <param name="planning/init_state_x" value="0.0"/>
+        <param name="planning/init_state_y" value="0.0"/>
+        <param name="planning/init_state_z" value="0.0"/>
+        <param name="planning/isAuto" value="false"/>
+        <param name="planning/vehicleRadius" value="0.9"/>
+        <param name="planning/collisionDistance" value="3.0"/>
+        <param name="planning/plan_hz" value="10"/>
+        <param name="planning/ctrl_hz" value="40"/>
+    </node>
+  </group>
+
+</launch>
