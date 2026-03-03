@@ -18,6 +18,7 @@ devel/
 build/
 develop-eggs/
 dist/
+bags/
 downloads/
 eggs/
 .eggs/
