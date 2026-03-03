@@ -7,7 +7,7 @@
   <arg name="land_trigger_topic" default="/track_land_trigger"/>
   <arg name="preempt_topic" default="/tracker_preempt"/>
   <arg name="mode_trigger_topic" default="/uav_planner/trigger"/>
-  <arg name="position_cmd_topic" default="/tracker_planning/pos_cmd"/>
+  <arg name="position_cmd_topic" default="/drone_0_planning/pos_cmd"/>
   <arg name="map_x_length" default="80.0"/>
   <arg name="map_y_length" default="80.0"/>
   <arg name="map_z_length" default="8.0"/>

@@ -5,8 +5,9 @@ Trigger track and publish a dynamic target odom trajectory.
 Default behavior:
 1) publish mode=2 to /uav_planner/trigger
 2) publish /tracker_trigger once
-3) publish /target/odom and /track_ekf/ekf_odom for 10s
-4) target moves at 0.5 m/s along +45 deg in XY plane
+3) keep refreshing mode=2 while publishing dynamic odom for 10s
+4) publish /target/odom and /track_ekf/ekf_odom for 10s
+5) target moves at 0.5 m/s along +45 deg in XY plane
 """
 
 import argparse
@@ -66,7 +67,7 @@ def topic_subscriber_count(topic_name):
 
 
 def resolve_odom_topic(preferred_topic):
-    candidates = [preferred_topic, "/track_ekf/ekf_odom"]
+    candidates = [preferred_topic, "/ekf/ekf_odom", "/track_ekf/ekf_odom"]
     checked = []
     for topic in candidates:
         if topic in checked:
@@ -116,6 +117,12 @@ def main():
     parser = argparse.ArgumentParser(description="Trigger track with dynamic target odom")
     parser.add_argument("--mode-topic", default="/uav_planner/trigger")
     parser.add_argument("--mode-value", type=int, default=2)
+    parser.add_argument(
+        "--mode-refresh-rate",
+        type=float,
+        default=2.0,
+        help="republish mode trigger during dynamic publishing; <=0 disables refresh",
+    )
     parser.add_argument("--trigger-topic", default="/tracker_trigger")
     parser.add_argument("--trigger-rate", type=float, default=5.0)
     parser.add_argument("--trigger-repeat", type=int, default=1)
@@ -235,6 +242,14 @@ def main():
         vy,
         float(args.duration),
     )
+    if float(args.mode_refresh_rate) > 0.0:
+        rospy.loginfo(
+            "%s Refresh mode=%d at %.2f Hz on %s",
+            DYN_TRACK_TAG,
+            int(args.mode_value),
+            float(args.mode_refresh_rate),
+            args.mode_topic,
+        )
 
     trigger_period = 1.0 / max(1.0, float(args.trigger_rate))
     trigger_msg = build_trigger_msg()
@@ -252,12 +267,22 @@ def main():
         rospy.sleep(trigger_period)
 
     rate = rospy.Rate(max(1.0, float(args.publish_rate)))
+    mode_refresh_period = None
+    last_mode_refresh = 0.0
+    if float(args.mode_refresh_rate) > 0.0:
+        mode_refresh_period = 1.0 / float(args.mode_refresh_rate)
+
     t0 = rospy.Time.now().to_sec()
     duration = max(0.0, float(args.duration))
     while not rospy.is_shutdown():
         t = rospy.Time.now().to_sec() - t0
         if t > duration:
             break
+
+        if mode_refresh_period is not None and (t - last_mode_refresh >= mode_refresh_period):
+            mode_msg.data = int(args.mode_value)
+            mode_pub.publish(mode_msg)
+            last_mode_refresh = t
 
         if use_static_odom:
             odom_msg = copy.deepcopy(static_odom)

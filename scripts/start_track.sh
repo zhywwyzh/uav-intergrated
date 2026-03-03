@@ -40,7 +40,7 @@ LOCAL_MAP_TOPIC="${LOCAL_MAP_TOPIC:-/drone_0_ego_planner_node/grid_map/occupancy
 TRACK_TRIGGER_TOPIC="${TRACK_TRIGGER_TOPIC:-/tracker_trigger}"
 TRACK_PREEMPT_TOPIC="${TRACK_PREEMPT_TOPIC:-/tracker_preempt}"
 TRACK_MODE_TRIGGER_TOPIC="${TRACK_MODE_TRIGGER_TOPIC:-/uav_planner/trigger}"
-TRACK_POSITION_CMD_TOPIC="${TRACK_POSITION_CMD_TOPIC:-/tracker_planning/pos_cmd}"
+TRACK_POSITION_CMD_TOPIC="${TRACK_POSITION_CMD_TOPIC:-/drone_0_planning/pos_cmd}"
 AUTO_TRACK_TRIGGER="${AUTO_TRACK_TRIGGER:-0}"
 
 echo "1. Tracker topic configuration:"

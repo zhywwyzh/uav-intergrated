@@ -9,6 +9,7 @@
 #include <ros/ros.h>
 #include <std_msgs/Empty.h>
 #include <std_msgs/Int32.h>
+#include <std_msgs/String.h>
 #include <traj_opt/traj_opt.h>
 
 #include <cmath>
@@ -23,6 +24,13 @@
 #ifndef TRACK_WARN
 #define TRACK_WARN(fmt, ...) ROS_WARN("\033[34m[TRACK]\033[0m " fmt, ##__VA_ARGS__)
 #endif
+#ifndef TRACK_STEP
+#define TRACK_STEP(fmt, ...) ROS_INFO("\033[38;5;208m[TRACK-STEP]\033[0m " fmt, ##__VA_ARGS__)
+#endif
+#ifndef TRACK_STEP_THROTTLE
+#define TRACK_STEP_THROTTLE(period, fmt, ...) \
+  ROS_INFO_THROTTLE(period, "\033[38;5;208m[TRACK-STEP]\033[0m " fmt, ##__VA_ARGS__)
+#endif
 
 namespace planning {
 
@@ -34,7 +42,7 @@ class Nodelet : public nodelet::Nodelet {
   ros::Subscriber gridmap_sub_, odom_sub_, target_sub_, triger_sub_, land_triger_sub_, preempt_sub_, mode_trigger_sub_;
   ros::Timer plan_timer_;
 
-  ros::Publisher traj_pub_, heartbeat_pub_, replanState_pub_;
+  ros::Publisher traj_pub_, heartbeat_pub_, replanState_pub_, hover_log_pub_;
 
   std::shared_ptr<mapping::OccGridMap> gridmapPtr_;
   std::shared_ptr<env::Env> envPtr_;
@@ -77,6 +85,18 @@ class Nodelet : public nodelet::Nodelet {
   std::atomic_bool triger_received_ = ATOMIC_VAR_INIT(false);
   std::atomic_bool target_received_ = ATOMIC_VAR_INIT(false);
   std::atomic_bool land_triger_received_ = ATOMIC_VAR_INIT(false);
+  ros::Time last_hover_log_pub_stamp_;
+
+  void publish_hovering_log() {
+    ros::Time now = ros::Time::now();
+    if ((now - last_hover_log_pub_stamp_).toSec() < 1.0) {
+      return;
+    }
+    std_msgs::String msg;
+    msg.data = "Hovering...";
+    hover_log_pub_.publish(msg);
+    last_hover_log_pub_stamp_ = now;
+  }
 
   void pub_hover_p(const Eigen::Vector3d& hover_p, const ros::Time& stamp) {
     quadrotor_msgs::PolyTraj traj_msg;
@@ -123,6 +143,8 @@ class Nodelet : public nodelet::Nodelet {
     last_trigger_stamp_ = ros::Time::now();
     ROS_INFO("\033[34m[TRACK]\033[0m Trigger received: x=%.2f y=%.2f z=%.2f",
              msgPtr->pose.position.x, msgPtr->pose.position.y, msgPtr->pose.position.z);
+    TRACK_STEP("S00 trigger latched -> goal=(%.2f, %.2f, %.2f), planner_mode=2",
+               goal_.x(), goal_.y(), goal_.z());
   }
 
   void mode_trigger_callback(const std_msgs::Int32::ConstPtr& msgPtr) {
@@ -131,6 +153,7 @@ class Nodelet : public nodelet::Nodelet {
       triger_received_ = true;
       last_trigger_stamp_ = ros::Time::now();
       TRACK_WARN("Mode trigger=2, tracker enabled.");
+      TRACK_STEP("S00 mode trigger accepted -> tracker enabled.");
       return;
     }
     triger_received_ = false;
@@ -139,6 +162,7 @@ class Nodelet : public nodelet::Nodelet {
     force_hover_ = true;
     last_trigger_stamp_ = ros::Time(0);
     TRACK_WARN("Mode trigger=%d, tracker standby.", planner_mode_.load());
+    TRACK_STEP("S00 mode trigger switched to standby (mode=%d), tracker states reset.", planner_mode_.load());
   }
 
   void land_triger_callback(const geometry_msgs::PoseStampedConstPtr& msgPtr) {
@@ -161,6 +185,7 @@ class Nodelet : public nodelet::Nodelet {
     last_trigger_stamp_ = ros::Time(0);
 
     TRACK_WARN("Preempt received, interrupted current task.");
+    TRACK_STEP("S00 preempt handled -> trigger cleared, hover state reset.");
   }
 
   void odom_callback(const nav_msgs::Odometry::ConstPtr& msgPtr) {
@@ -204,6 +229,7 @@ class Nodelet : public nodelet::Nodelet {
     land_triger_received_ = false;
     wait_hover_ = true;
     force_hover_ = true;
+    TRACK_STEP_THROTTLE(1.0, "S00 trigger expired (hold=%.2fs), tracker paused.", trigger_hold_sec_);
     return false;
   }
 
@@ -212,6 +238,8 @@ class Nodelet : public nodelet::Nodelet {
       return true;
     }
     if (speed <= force_hover_speed_threshold_) {
+      TRACK_STEP_THROTTLE(1.0, "S03 force-hover gate released by low speed: v=%.2f <= %.2f",
+                          speed, force_hover_speed_threshold_);
       return true;
     }
     if (force_hover_timeout_sec_ > 0.0 &&
@@ -219,6 +247,8 @@ class Nodelet : public nodelet::Nodelet {
       TRACK_WARN("Force-hover timeout reached (v=%.2f > %.2f), continue planning.",
                  speed, force_hover_speed_threshold_);
       force_hover_ = false;
+      TRACK_STEP("S03 force-hover gate released by timeout: v=%.2f, timeout=%.2fs",
+                 speed, force_hover_timeout_sec_);
       return true;
     }
     ROS_WARN_THROTTLE(1.0,
@@ -229,10 +259,12 @@ class Nodelet : public nodelet::Nodelet {
 
   // NOTE main callback
   void plan_timer_callback(const ros::TimerEvent& event) {
+    (void)event;
     heartbeat_pub_.publish(std_msgs::Empty());
     if (!trigger_active()) {
       return;
     }
+    TRACK_STEP_THROTTLE(1.0, "S01 trigger active -> entering planner loop.");
     if (!odom_received_) {
       ROS_WARN_THROTTLE(1.0, "\033[34m[TRACK]\033[0m Trigger active but waiting for odom.");
       return;
@@ -278,9 +310,12 @@ class Nodelet : public nodelet::Nodelet {
     target_q.x() = replanStateMsg_.target.pose.pose.orientation.x;
     target_q.y() = replanStateMsg_.target.pose.pose.orientation.y;
     target_q.z() = replanStateMsg_.target.pose.pose.orientation.z;
+    TRACK_STEP_THROTTLE(1.0, "S02 input ready: |odom_v|=%.2f, |target_v|=%.2f, dist=%.2f",
+                        odom_v.norm(), target_v.norm(), (target_p - odom_p).norm());
 
     // NOTE force-hover: waiting for the speed of drone small enough
     if (!should_release_force_hover(ros::Time::now(), odom_v.norm())) {
+      TRACK_STEP_THROTTLE(1.0, "S03 waiting force-hover gate release.");
       return;
     }
 
@@ -291,7 +326,9 @@ class Nodelet : public nodelet::Nodelet {
           pub_hover_p(odom_p, ros::Time::now());
           wait_hover_ = true;
         }
+        publish_hovering_log();
         TRACK_WARN("[planner] HOVERING...");
+        TRACK_STEP_THROTTLE(1.0, "S04 landing mode hovering near target.");
         return;
       }
       // TODO get the orientation fo target and calculate the pose of landing point
@@ -312,7 +349,9 @@ class Nodelet : public nodelet::Nodelet {
           pub_hover_p(odom_p, ros::Time::now());
           wait_hover_ = true;
         }
+        publish_hovering_log();
         TRACK_WARN("[planner] HOVERING...");
+        TRACK_STEP_THROTTLE(1.0, "S04 tracking stable -> keep hovering (dist/tolerance satisfied).");
         replanStateMsg_.state = -1;
         replanState_pub_.publish(replanStateMsg_);
         return;
@@ -340,6 +379,11 @@ class Nodelet : public nodelet::Nodelet {
     std::vector<Eigen::Vector3d> target_predcit;
     // ros::Time t_start = ros::Time::now();
     bool generate_new_traj_success = prePtr_->predict(target_p, target_v, target_predcit);
+    if (generate_new_traj_success) {
+      TRACK_STEP_THROTTLE(1.0, "S05 prediction success: horizon_pts=%zu", target_predcit.size());
+    } else {
+      TRACK_STEP_THROTTLE(1.0, "S05 prediction failed.");
+    }
     // ros::Time t_stop = ros::Time::now();
     // std::cout << "predict costs: " << (t_stop - t_start).toSec() * 1e3 << "ms" << std::endl;
     if (generate_new_traj_success) {
@@ -391,6 +435,11 @@ class Nodelet : public nodelet::Nodelet {
         generate_new_traj_success = envPtr_->short_astar(p_start, target_p, path);
       } else {
         generate_new_traj_success = envPtr_->findVisiblePath(p_start, target_predcit, way_pts, path);
+      }
+      if (generate_new_traj_success) {
+        TRACK_STEP_THROTTLE(1.0, "S06 path search success: path_pts=%zu", path.size());
+      } else {
+        TRACK_STEP_THROTTLE(1.0, "S06 path search failed.");
       }
       // ros::Time t_end0 = ros::Time::now();
       // t_path += (t_end0 - t_front0).toSec() * 1e3;
@@ -455,6 +504,12 @@ class Nodelet : public nodelet::Nodelet {
                                                                target_predcit, visible_ps, thetas,
                                                                hPolys, traj);
       }
+      if (generate_new_traj_success) {
+        TRACK_STEP_THROTTLE(1.0, "S07 trajectory optimization success: duration=%.2fs",
+                            traj.getTotalDuration());
+      } else {
+        TRACK_STEP_THROTTLE(1.0, "S07 trajectory optimization failed.");
+      }
       // ros::Time t_end4 = ros::Time::now();
       // double t_optimization = (t_end4 - t_front4).toSec() * 1e3;
 
@@ -475,9 +530,11 @@ class Nodelet : public nodelet::Nodelet {
     bool valid = false;
     if (generate_new_traj_success) {
       valid = validcheck(traj, replan_stamp);
+      TRACK_STEP_THROTTLE(1.0, "S08 collision check %s.", valid ? "passed" : "failed");
     } else {
       replanStateMsg_.state = -2;
       replanState_pub_.publish(replanStateMsg_);
+      TRACK_STEP_THROTTLE(1.0, "S08 skipped collision check because traj generation failed.");
     }
     if (valid) {
       force_hover_ = false;
@@ -495,12 +552,15 @@ class Nodelet : public nodelet::Nodelet {
         yaw = 2 * std::atan2(target_q.z(), target_q.w());
       }
       pub_traj(traj, yaw, replan_stamp);
+      TRACK_STEP_THROTTLE(2.0, "S09 publish trajectory success: traj_id=%d, yaw=%.2f", traj_id_ - 1, yaw);
       traj_poly_ = traj;
       replan_stamp_ = replan_stamp;
     } else if (force_hover_) {
+      publish_hovering_log();
       ROS_ERROR("[planner] REPLAN FAILED, HOVERING...");
       replanStateMsg_.state = 1;
       replanState_pub_.publish(replanStateMsg_);
+      TRACK_STEP_THROTTLE(2.0, "S09 replan failed while force_hover=true -> keep hover.");
       return;
     } else if (validcheck(traj_poly_, replan_stamp_)) {
       force_hover_ = true;
@@ -508,11 +568,14 @@ class Nodelet : public nodelet::Nodelet {
       replanStateMsg_.state = 2;
       replanState_pub_.publish(replanStateMsg_);
       pub_hover_p(iniState.col(0), replan_stamp);
+      publish_hovering_log();
+      TRACK_STEP("S09 emergency stop issued -> publish hover command.");
       return;
     } else {
       ROS_ERROR("[planner] REPLAN FAILED, EXECUTE LAST TRAJ...");
       replanStateMsg_.state = 3;
       replanState_pub_.publish(replanStateMsg_);
+      TRACK_STEP_THROTTLE(2.0, "S09 replan failed -> continue executing last trajectory.");
       return;  // current generated traj invalid but last is valid
     }
     visPtr_->visualize_traj(traj, "traj");
@@ -590,6 +653,7 @@ class Nodelet : public nodelet::Nodelet {
         pub_hover_p(odom_p, ros::Time::now());
         wait_hover_ = true;
       }
+      publish_hovering_log();
       TRACK_WARN("[planner] HOVERING...");
       replanStateMsg_.state = -1;
       replanState_pub_.publish(replanStateMsg_);
@@ -686,6 +750,7 @@ class Nodelet : public nodelet::Nodelet {
       traj_poly_ = traj;
       replan_stamp_ = replan_stamp;
     } else if (force_hover_) {
+      publish_hovering_log();
       ROS_ERROR("[planner] REPLAN FAILED, HOVERING...");
       replanStateMsg_.state = 1;
       replanState_pub_.publish(replanStateMsg_);
@@ -696,6 +761,7 @@ class Nodelet : public nodelet::Nodelet {
       replanStateMsg_.state = 2;
       replanState_pub_.publish(replanStateMsg_);
       pub_hover_p(iniState.col(0), replan_stamp);
+      publish_hovering_log();
       return;
     } else {
       ROS_ERROR("[planner] REPLAN FAILED, EXECUTE LAST TRAJ...");
@@ -861,6 +927,8 @@ class Nodelet : public nodelet::Nodelet {
     heartbeat_pub_ = nh.advertise<std_msgs::Empty>("heartbeat", 10);
     traj_pub_ = nh.advertise<quadrotor_msgs::PolyTraj>("trajectory", 1);
     replanState_pub_ = nh.advertise<quadrotor_msgs::ReplanState>("replanState", 1);
+    hover_log_pub_ = nh.advertise<std_msgs::String>("hover_log", 10, true);
+    last_hover_log_pub_stamp_ = ros::Time(0);
 
     if (debug_) {
       plan_timer_ = nh.createTimer(ros::Duration(1.0 / plan_hz), &Nodelet::debug_timer_callback, this);
@@ -883,6 +951,7 @@ class Nodelet : public nodelet::Nodelet {
     preempt_sub_ = nh.subscribe<std_msgs::Empty>("preempt", 10, &Nodelet::preempt_callback, this, ros::TransportHints().tcpNoDelay());
     mode_trigger_sub_ = nh.subscribe<std_msgs::Int32>("mode_trigger", 10, &Nodelet::mode_trigger_callback, this, ros::TransportHints().tcpNoDelay());
     TRACK_WARN("Planning node initialized!");
+    TRACK_STEP("Step logger enabled (orange): S00~S09.");
   }
 
  public:

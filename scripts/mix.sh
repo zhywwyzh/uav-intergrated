@@ -161,7 +161,7 @@ start_track() {
     local track_trigger_topic="${TRACK_TRIGGER_TOPIC:-/tracker_trigger}"
     local track_preempt_topic="${TRACK_PREEMPT_TOPIC:-/tracker_preempt}"
     local track_mode_trigger_topic="${TRACK_MODE_TRIGGER_TOPIC:-/uav_planner/trigger}"
-    local track_position_cmd_topic="${TRACK_POSITION_CMD_TOPIC:-/tracker_planning/pos_cmd}"
+    local track_position_cmd_topic="${TRACK_POSITION_CMD_TOPIC:-/drone_0_planning/pos_cmd}"
     local auto_track_trigger="${AUTO_TRACK_TRIGGER:-0}"
 
     cd "$UAV_WS" || return 1
