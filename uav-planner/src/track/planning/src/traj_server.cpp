@@ -3,6 +3,7 @@
 #include <quadrotor_msgs/PositionCommand.h>
 #include <ros/ros.h>
 #include <std_msgs/Empty.h>
+#include <std_msgs/Int32.h>
 #include <visualization_msgs/Marker.h>
 
 #include <traj_opt/poly_traj_utils.hpp>
@@ -19,6 +20,9 @@ quadrotor_msgs::PolyTraj trajMsg_, trajMsg_last_;
 Eigen::Vector3d last_p_;
 double last_yaw_ = 0;
 bool has_last_cmd_ = false;
+int active_session_id_ = 0;
+bool have_session_ = false;
+ros::Time session_update_time_(0);
 
 void reset_runtime_state(bool clear_last_cmd) {
   receive_traj_ = false;
@@ -124,11 +128,28 @@ void heartbeatCallback(const std_msgs::EmptyConstPtr &msg) {
 }
 
 void polyTrajCallback(const quadrotor_msgs::PolyTrajConstPtr &msgPtr) {
+  if (have_session_ && session_update_time_.toSec() > 1e-5 &&
+      msgPtr->start_time + ros::Duration(1e-3) < session_update_time_) {
+    ROS_WARN_THROTTLE(1.0, "[traj_server] Ignore stale trajectory from previous session.");
+    return;
+  }
   trajMsg_ = *msgPtr;
   if (!receive_traj_) {
     trajMsg_last_ = trajMsg_;
     receive_traj_ = true;
   }
+}
+
+void trackerSessionCallback(const std_msgs::Int32ConstPtr &msg) {
+  const int new_session = msg->data;
+  if (have_session_ && new_session == active_session_id_) {
+    return;
+  }
+  active_session_id_ = new_session;
+  have_session_ = true;
+  session_update_time_ = ros::Time::now();
+  reset_runtime_state(false);
+  TRACK_WARN("Tracker session switched to %d, runtime cache reset.", active_session_id_);
 }
 
 void preemptCallback(const std_msgs::EmptyConstPtr &msg) {
@@ -164,6 +185,7 @@ int main(int argc, char **argv) {
   ros::Subscriber poly_traj_sub = nh.subscribe("trajectory", 10, polyTrajCallback);
   ros::Subscriber heartbeat_sub = nh.subscribe("heartbeat", 10, heartbeatCallback);
   ros::Subscriber preempt_sub = nh.subscribe("preempt", 10, preemptCallback);
+  ros::Subscriber tracker_session_sub = nh.subscribe("tracker_session", 10, trackerSessionCallback);
 
   pos_cmd_pub_ = nh.advertise<quadrotor_msgs::PositionCommand>("position_cmd", 50);
 

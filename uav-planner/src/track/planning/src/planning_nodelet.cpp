@@ -46,7 +46,7 @@ class Nodelet : public nodelet::Nodelet {
   ros::Subscriber gridmap_sub_, odom_sub_, target_sub_, triger_sub_, land_triger_sub_, preempt_sub_, mode_trigger_sub_;
   ros::Timer plan_timer_;
 
-  ros::Publisher traj_pub_, heartbeat_pub_, replanState_pub_, hover_log_pub_, preempt_pub_, mode_state_pub_;
+  ros::Publisher traj_pub_, heartbeat_pub_, replanState_pub_, hover_log_pub_, preempt_pub_, mode_state_pub_, tracker_session_pub_;
 
   std::shared_ptr<mapping::OccGridMap> gridmapPtr_;
   std::shared_ptr<env::Env> envPtr_;
@@ -75,10 +75,17 @@ class Nodelet : public nodelet::Nodelet {
   bool force_hover_ = true;
   bool have_active_traj_ = false;
   bool force_plan_from_odom_ = true;
+  int tracker_session_id_ = 0;
+  std::atomic<double> session_epoch_sec_{0.0};
+  std::atomic<double> last_odom_recv_sec_{0.0};
+  std::atomic<double> last_target_recv_sec_{0.0};
+  std::atomic_bool require_fresh_odom_after_session_ = ATOMIC_VAR_INIT(false);
+  std::atomic_bool require_fresh_target_after_session_ = ATOMIC_VAR_INIT(false);
   ros::Time last_trigger_stamp_;
   double trigger_hold_sec_ = 2.0;
   double force_hover_speed_threshold_ = 0.1;
   double force_hover_timeout_sec_ = 2.0;
+  double snapshot_max_age_sec_ = 0.3;
   std::atomic_int planner_mode_ = ATOMIC_VAR_INIT(0);
 
   nav_msgs::Odometry odom_msg_, target_msg_;
@@ -129,6 +136,25 @@ class Nodelet : public nodelet::Nodelet {
     mode_state_pub_.publish(msg);
   }
 
+  void publish_tracker_session_state() {
+    if (!tracker_session_pub_) {
+      return;
+    }
+    std_msgs::Int32 msg;
+    msg.data = tracker_session_id_;
+    tracker_session_pub_.publish(msg);
+  }
+
+  void begin_new_tracker_session(const char* reason, bool require_fresh_inputs) {
+    (void)reason;
+    ++tracker_session_id_;
+    const double now_sec = ros::Time::now().toSec();
+    session_epoch_sec_.store(now_sec, std::memory_order_relaxed);
+    require_fresh_odom_after_session_.store(require_fresh_inputs, std::memory_order_relaxed);
+    require_fresh_target_after_session_.store(require_fresh_inputs, std::memory_order_relaxed);
+    publish_tracker_session_state();
+  }
+
   void clear_planning_session_cache(const char* reason) {
     (void)reason;
     traj_poly_ = Trajectory();
@@ -137,7 +163,10 @@ class Nodelet : public nodelet::Nodelet {
     force_plan_from_odom_ = true;
   }
 
-  void reset_tracker_runtime(bool send_preempt, bool clear_cached_traj, const char* reason) {
+  void reset_tracker_runtime(bool send_preempt, bool clear_cached_traj, bool begin_new_session, bool require_fresh_inputs, const char* reason) {
+    if (begin_new_session) {
+      begin_new_tracker_session(reason, require_fresh_inputs);
+    }
     triger_received_ = false;
     land_triger_received_ = false;
     wait_hover_ = true;
@@ -195,11 +224,12 @@ class Nodelet : public nodelet::Nodelet {
       return;
     }
 
+    // New tracker task in the same mode should start from the current pose.
+    reset_tracker_runtime(false, true, true, true, "NEW_TRIGGER");
     goal_ << msgPtr->pose.position.x, msgPtr->pose.position.y, 0.9;
     triger_received_ = true;
     wait_hover_ = true;
     force_hover_ = true;
-    clear_planning_session_cache("NEW_TRIGGER");
     last_trigger_stamp_ = ros::Time::now();
     ROS_INFO("\033[34m[TRACK]\033[0m Trigger received: x=%.2f y=%.2f z=%.2f",
              msgPtr->pose.position.x, msgPtr->pose.position.y, msgPtr->pose.position.z);
@@ -224,12 +254,12 @@ class Nodelet : public nodelet::Nodelet {
     planner_mode_ = mode;
     if (mode == MODE_TRACKER) {
       // Enter tracker mode from standby/ego: clear stale runtime and wait explicit tracker trigger.
-      reset_tracker_runtime(true, true, "MODE_ENTER_TRACKER");
+      reset_tracker_runtime(true, true, true, true, "MODE_ENTER_TRACKER");
       TRACK_WARN("Mode trigger=2, tracker enabled (waiting for tracker trigger).");
       TRACK_STEP("S00 mode trigger accepted -> tracker enabled, runtime reset.");
     } else {
       // Leave tracker mode: immediately preempt tracker traj output and clear runtime flags.
-      reset_tracker_runtime(true, true, "MODE_LEAVE_TRACKER");
+      reset_tracker_runtime(true, true, true, true, "MODE_LEAVE_TRACKER");
       TRACK_WARN("Mode trigger=%d, tracker standby.", mode);
       TRACK_STEP("S00 mode trigger switched to standby (mode=%d), tracker states reset.", mode);
     }
@@ -250,7 +280,7 @@ class Nodelet : public nodelet::Nodelet {
   }
 
   void preempt_callback(const std_msgs::Empty::ConstPtr& /*msgPtr*/) {
-    reset_tracker_runtime(false, true, "PREEMPT");
+    reset_tracker_runtime(false, true, false, false, "PREEMPT");
 
     TRACK_WARN("Preempt received, interrupted current task.");
     TRACK_STEP("S00 preempt handled -> trigger cleared, hover state reset.");
@@ -262,6 +292,7 @@ class Nodelet : public nodelet::Nodelet {
       ;
     odom_msg_ = *msgPtr;
     odom_received_ = true;
+    last_odom_recv_sec_.store(ros::Time::now().toSec(), std::memory_order_relaxed);
     odom_lock_.clear();
   }
 
@@ -270,6 +301,7 @@ class Nodelet : public nodelet::Nodelet {
       ;
     target_msg_ = *msgPtr;
     target_received_ = true;
+    last_target_recv_sec_.store(ros::Time::now().toSec(), std::memory_order_relaxed);
     target_lock_.clear();
   }
 
@@ -351,6 +383,44 @@ class Nodelet : public nodelet::Nodelet {
     iniState.col(1) = snapshot.odom_v;
   }
 
+  bool fresh_input_ready(bool need_target) {
+    const double now_sec = ros::Time::now().toSec();
+    const double epoch_sec = session_epoch_sec_.load(std::memory_order_relaxed);
+    const double odom_sec = last_odom_recv_sec_.load(std::memory_order_relaxed);
+    const double target_sec = last_target_recv_sec_.load(std::memory_order_relaxed);
+
+    if (odom_sec <= 0.0) {
+      return false;
+    }
+    if (snapshot_max_age_sec_ > 0.0 && (now_sec - odom_sec) > snapshot_max_age_sec_) {
+      return false;
+    }
+    if (require_fresh_odom_after_session_.load(std::memory_order_relaxed)) {
+      if (odom_sec <= epoch_sec) {
+        return false;
+      }
+      require_fresh_odom_after_session_.store(false, std::memory_order_relaxed);
+    }
+
+    if (!need_target) {
+      return true;
+    }
+
+    if (target_sec <= 0.0) {
+      return false;
+    }
+    if (snapshot_max_age_sec_ > 0.0 && (now_sec - target_sec) > snapshot_max_age_sec_) {
+      return false;
+    }
+    if (require_fresh_target_after_session_.load(std::memory_order_relaxed)) {
+      if (target_sec <= epoch_sec) {
+        return false;
+      }
+      require_fresh_target_after_session_.store(false, std::memory_order_relaxed);
+    }
+    return true;
+  }
+
   bool trigger_active() {
     if (planner_mode_.load() != MODE_TRACKER) {
       return false;
@@ -364,7 +434,7 @@ class Nodelet : public nodelet::Nodelet {
     if ((ros::Time::now() - last_trigger_stamp_).toSec() <= trigger_hold_sec_) {
       return true;
     }
-    reset_tracker_runtime(true, true, "TRIGGER_EXPIRE");
+    reset_tracker_runtime(true, true, true, false, "TRIGGER_EXPIRE");
     TRACK_STEP_THROTTLE(1.0, "S00 trigger expired (hold=%.2fs), tracker paused.", trigger_hold_sec_);
     return false;
   }
@@ -403,6 +473,10 @@ class Nodelet : public nodelet::Nodelet {
     TRACK_STEP_THROTTLE(1.0, "S01 trigger active -> entering planner loop.");
     if (!map_received_) {
       ROS_WARN_THROTTLE(1.0, "\033[34m[TRACK]\033[0m Trigger active but waiting for map (gridmap_inflate).");
+      return;
+    }
+    if (!fresh_input_ready(true)) {
+      ROS_WARN_THROTTLE(1.0, "\033[34m[TRACK]\033[0m Waiting fresh odom/target after session switch.");
       return;
     }
 
@@ -700,6 +774,10 @@ class Nodelet : public nodelet::Nodelet {
     }
     if (!map_received_) {
       ROS_WARN_THROTTLE(1.0, "\033[34m[TRACK]\033[0m Trigger active but waiting for map (gridmap_inflate).");
+      return;
+    }
+    if (!fresh_input_ready(false)) {
+      ROS_WARN_THROTTLE(1.0, "\033[34m[TRACK]\033[0m Waiting fresh odom after session switch.");
       return;
     }
     PlannerSnapshot snapshot;
@@ -1009,10 +1087,11 @@ class Nodelet : public nodelet::Nodelet {
     nh.param("trigger_hold_sec", trigger_hold_sec_, -1.0);
     nh.param("force_hover_speed_threshold", force_hover_speed_threshold_, 0.1);
     nh.param("force_hover_timeout_sec", force_hover_timeout_sec_, 2.0);
+    nh.param("snapshot_max_age_sec", snapshot_max_age_sec_, 0.3);
     int initial_mode = 0;
     nh.param("initial_mode", initial_mode, 0);
     planner_mode_ = initial_mode;
-    clear_planning_session_cache("INIT");
+    reset_tracker_runtime(false, true, true, false, "INIT");
 
     gridmapPtr_ = std::make_shared<mapping::OccGridMap>();
     envPtr_ = std::make_shared<env::Env>(nh, gridmapPtr_);
@@ -1026,8 +1105,10 @@ class Nodelet : public nodelet::Nodelet {
     hover_log_pub_ = nh.advertise<std_msgs::String>("hover_log", 10, true);
     preempt_pub_ = nh.advertise<std_msgs::Empty>("preempt", 10);
     mode_state_pub_ = nh.advertise<std_msgs::Int32>("mode_state", 10, true);
+    tracker_session_pub_ = nh.advertise<std_msgs::Int32>("tracker_session", 10, true);
     last_hover_log_pub_stamp_ = ros::Time(0);
     publish_mode_state();
+    publish_tracker_session_state();
 
     if (debug_) {
       plan_timer_ = nh.createTimer(ros::Duration(1.0 / plan_hz), &Nodelet::debug_timer_callback, this);

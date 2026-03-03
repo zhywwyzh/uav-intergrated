@@ -8,6 +8,7 @@
   <arg name="land_trigger_topic" default="/land_triger"/>
   <arg name="preempt_topic" default="/tracker_preempt"/>
   <arg name="mode_trigger_topic" default="/uav_planner/trigger"/>
+  <arg name="tracker_session_topic" default="/track/session"/>
   <arg name="position_cmd_topic" default="position_cmd"/>
 
   <!-- <node pkg="nodelet" type="nodelet" name="plan_manage" args="manager" output="screen">
@@ -25,6 +26,7 @@
     <remap from="~land_triger" to="$(arg land_trigger_topic)"/>
     <remap from="~preempt" to="$(arg preempt_topic)"/>
     <remap from="~mode_trigger" to="$(arg mode_trigger_topic)"/>
+    <remap from="~tracker_session" to="$(arg tracker_session_topic)"/>
 
     <param name="plan_hz" value="20"/>
 
@@ -54,6 +56,7 @@
     <remap from="~trajectory" to="trajectory"/>
     <remap from="~heartbeat" to="heartbeat"/>
     <remap from="~preempt" to="$(arg preempt_topic)"/>
+    <remap from="~tracker_session" to="$(arg tracker_session_topic)"/>
     <param name="time_forward" value="1.0" type="double"/>
   </node>
 </launch>

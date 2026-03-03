@@ -92,7 +92,7 @@ def main():
         mode_pub.publish(mode_msg)
         rospy.sleep(0.03)
     try:
-        rospy.wait_for_service(args.planning_service, timeout=2.0)
+        rospy.wait_for_service(args.planning_service, timeout=0.5)
         set_planning = rospy.ServiceProxy(args.planning_service, SetBool)
         resp = set_planning(planning_target)
         rospy.loginfo(
