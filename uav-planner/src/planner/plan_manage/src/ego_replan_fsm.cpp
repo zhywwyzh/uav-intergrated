@@ -178,7 +178,7 @@ namespace ego_planner
       if (!switch_latched_)
       {
         switch_latched_ = true;
-        have_trigger_ = false;
+        resetEgoTaskSession(false);
         tracker_land_requested_ = false;
         if (have_odom_)
         {
@@ -208,9 +208,8 @@ namespace ego_planner
       else
       {
         traj_server_.setOutputEnabled(true);
+        resetEgoTaskSession(true);
         syncEgoStartPoseFromOdom();
-        // Avoid auto-resuming stale goal after mode switches.
-        have_trigger_ = false;
         changeFSMExecState(EGO_WAIT_TARGET, "MODE_SWITCH");
       }
       break;
@@ -1478,7 +1477,26 @@ namespace ego_planner
       return;
     }
 
+    const int prev_req_mode = planner_mode_;
+    const int cur_active_mode = active_mode_;
     planner_mode_ = trigger_mode;
+
+    // Policy:
+    // 1) Cross-mode (EGO<->TRACKER): cancel continuation and switch from scratch.
+    // 2) Same-mode retrigger (EGO->EGO / TRACKER->TRACKER): keep current task continuation.
+    const bool same_mode_retrigger = (cur_active_mode != MODE_IDLE && planner_mode_ == cur_active_mode);
+
+    if (same_mode_retrigger)
+    {
+      if (planner_mode_ == MODE_EGO)
+      {
+        command_stop_ = false;
+      }
+      ROS_INFO("\033[32m[EGO]\033[0m Mode trigger=%d unchanged with active_mode=%d, keep current task continuation.",
+               trigger_mode, cur_active_mode);
+      return;
+    }
+
     if (planner_mode_ == MODE_EGO)
     {
       command_stop_ = false;
@@ -1487,9 +1505,15 @@ namespace ego_planner
     }
     else
     {
-      have_trigger_ = false;
+      resetEgoTaskSession(true);
       tracker_land_requested_ = false;
       ROS_INFO("\033[32m[EGO]\033[0m Mode trigger=%d -> TRACKER planner requested.", trigger_mode);
+    }
+
+    if (prev_req_mode == planner_mode_ &&
+        exec_state_ == MODE_SWITCH_PREPARE)
+    {
+      return;
     }
 
     if (exec_state_ != MODE_SWITCH_PREPARE && exec_state_ != COMMAND_STOP && exec_state_ != EMERGENCY_STOP)
@@ -1519,6 +1543,18 @@ namespace ego_planner
   {
     (void)msg;
     tracker_land_requested_ = true;
+  }
+
+  void EGOReplanFSM::resetEgoTaskSession(bool clear_target)
+  {
+    have_trigger_ = false;
+    cur_traj_to_cur_target_ = false;
+    if (clear_target)
+    {
+      have_target_ = false;
+      final_goal_ = odom_pos_;
+      glb_start_pt_ = odom_pos_;
+    }
   }
 
   void EGOReplanFSM::syncEgoStartPoseFromOdom()

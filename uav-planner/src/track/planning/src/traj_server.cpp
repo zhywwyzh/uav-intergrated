@@ -18,6 +18,17 @@ bool flight_start_ = false;
 quadrotor_msgs::PolyTraj trajMsg_, trajMsg_last_;
 Eigen::Vector3d last_p_;
 double last_yaw_ = 0;
+bool has_last_cmd_ = false;
+
+void reset_runtime_state(bool clear_last_cmd) {
+  receive_traj_ = false;
+  flight_start_ = false;
+  trajMsg_ = quadrotor_msgs::PolyTraj();
+  trajMsg_last_ = quadrotor_msgs::PolyTraj();
+  if (clear_last_cmd) {
+    has_last_cmd_ = false;
+  }
+}
 
 void publish_cmd(int traj_id,
                  const Eigen::Vector3d &p,
@@ -43,6 +54,7 @@ void publish_cmd(int traj_id,
   cmd.yaw_dot = yd;
   pos_cmd_pub_.publish(cmd);
   last_p_ = p;
+  has_last_cmd_ = true;
 }
 
 bool exe_traj(const quadrotor_msgs::PolyTraj &trajMsg) {
@@ -121,8 +133,7 @@ void polyTrajCallback(const quadrotor_msgs::PolyTrajConstPtr &msgPtr) {
 
 void preemptCallback(const std_msgs::EmptyConstPtr &msg) {
   (void)msg;
-  receive_traj_ = false;
-  flight_start_ = false;
+  reset_runtime_state(false);
   TRACK_WARN("Preempt received, traj server output suspended.");
 }
 
@@ -133,7 +144,9 @@ void cmdCallback(const ros::TimerEvent &e) {
   ros::Time time_now = ros::Time::now();
   if ((time_now - heartbeat_time_).toSec() > 0.5) {
     ROS_ERROR_ONCE("[traj_server] Lost heartbeat from the planner, is he dead?");
-    publish_cmd(trajMsg_.traj_id, last_p_, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), 0, 0);  // TODO yaw
+    if (has_last_cmd_) {
+      publish_cmd(trajMsg_.traj_id, last_p_, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), last_yaw_, 0);
+    }
     return;
   }
   if (exe_traj(trajMsg_)) {

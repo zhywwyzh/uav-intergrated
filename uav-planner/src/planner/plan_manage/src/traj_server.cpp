@@ -44,8 +44,15 @@ namespace ego_planner
       // Stop publishing immediately when this planner is inactive.
       receive_traj_ = false;
       time_rec_.has_init = false;
+      yaw_given_.reach_given_yaw_ = true;
       do_once_ = true;
+      return;
     }
+
+    // Re-enabled after another mode took over: re-sync incremental states before output resumes.
+    time_rec_.has_init = false;
+    last_yawdot_ = 0.0;
+    do_once_ = true;
   }
 
   void TrajServer::resetYawLookforward(Eigen::Vector3d pos)
@@ -63,7 +70,10 @@ namespace ego_planner
     yaw_given_.reach_given_yaw_ = false;
     yaw_given_.look_forward = look_forward;
 
-    // last_yaw_ = cur_yaw;
+    // Always anchor yaw integration to current odom yaw to avoid stale-mode yaw jumps.
+    last_yaw_ = cur_yaw;
+    last_yawdot_ = 0.0;
+    time_rec_.has_init = false;
   }
 
   void TrajServer::setTrajectory(poly_traj::Trajectory &traj, double start_time)

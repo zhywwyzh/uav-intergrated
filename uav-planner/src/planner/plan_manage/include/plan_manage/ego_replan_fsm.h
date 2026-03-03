@@ -189,6 +189,7 @@ namespace ego_planner
     void trackerLandTriggerCallback(const geometry_msgs::PoseStampedConstPtr &msg);
     void RecvBroadcastMINCOTrajCallback(const traj_utils::MINCOTrajConstPtr &msg);
     void polyTraj2ROSMsg(traj_utils::PolyTraj *poly_msg, traj_utils::MINCOTraj *MINCO_msg);
+    void resetEgoTaskSession(bool clear_target);
     void syncEgoStartPoseFromOdom();
 
     /* utils */

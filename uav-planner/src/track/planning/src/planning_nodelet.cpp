@@ -73,6 +73,8 @@ class Nodelet : public nodelet::Nodelet {
   int traj_id_ = 0;
   bool wait_hover_ = true;
   bool force_hover_ = true;
+  bool have_active_traj_ = false;
+  bool force_plan_from_odom_ = true;
   ros::Time last_trigger_stamp_;
   double trigger_hold_sec_ = 2.0;
   double force_hover_speed_threshold_ = 0.1;
@@ -90,6 +92,15 @@ class Nodelet : public nodelet::Nodelet {
   std::atomic_bool target_received_ = ATOMIC_VAR_INIT(false);
   std::atomic_bool land_triger_received_ = ATOMIC_VAR_INIT(false);
   ros::Time last_hover_log_pub_stamp_;
+
+  struct PlannerSnapshot {
+    Eigen::Vector3d odom_p;
+    Eigen::Vector3d odom_v;
+    Eigen::Quaterniond odom_q;
+    Eigen::Vector3d target_p;
+    Eigen::Vector3d target_v;
+    Eigen::Quaterniond target_q;
+  };
 
   void publish_hovering_log() {
     ros::Time now = ros::Time::now();
@@ -118,12 +129,23 @@ class Nodelet : public nodelet::Nodelet {
     mode_state_pub_.publish(msg);
   }
 
-  void reset_tracker_runtime(bool send_preempt) {
+  void clear_planning_session_cache(const char* reason) {
+    (void)reason;
+    traj_poly_ = Trajectory();
+    replan_stamp_ = ros::Time(0);
+    have_active_traj_ = false;
+    force_plan_from_odom_ = true;
+  }
+
+  void reset_tracker_runtime(bool send_preempt, bool clear_cached_traj, const char* reason) {
     triger_received_ = false;
     land_triger_received_ = false;
     wait_hover_ = true;
     force_hover_ = true;
     last_trigger_stamp_ = ros::Time(0);
+    if (clear_cached_traj) {
+      clear_planning_session_cache(reason);
+    }
     if (send_preempt) {
       publish_preempt_burst(2);
     }
@@ -177,6 +199,7 @@ class Nodelet : public nodelet::Nodelet {
     triger_received_ = true;
     wait_hover_ = true;
     force_hover_ = true;
+    clear_planning_session_cache("NEW_TRIGGER");
     last_trigger_stamp_ = ros::Time::now();
     ROS_INFO("\033[34m[TRACK]\033[0m Trigger received: x=%.2f y=%.2f z=%.2f",
              msgPtr->pose.position.x, msgPtr->pose.position.y, msgPtr->pose.position.z);
@@ -201,12 +224,12 @@ class Nodelet : public nodelet::Nodelet {
     planner_mode_ = mode;
     if (mode == MODE_TRACKER) {
       // Enter tracker mode from standby/ego: clear stale runtime and wait explicit tracker trigger.
-      reset_tracker_runtime(true);
+      reset_tracker_runtime(true, true, "MODE_ENTER_TRACKER");
       TRACK_WARN("Mode trigger=2, tracker enabled (waiting for tracker trigger).");
       TRACK_STEP("S00 mode trigger accepted -> tracker enabled, runtime reset.");
     } else {
       // Leave tracker mode: immediately preempt tracker traj output and clear runtime flags.
-      reset_tracker_runtime(true);
+      reset_tracker_runtime(true, true, "MODE_LEAVE_TRACKER");
       TRACK_WARN("Mode trigger=%d, tracker standby.", mode);
       TRACK_STEP("S00 mode trigger switched to standby (mode=%d), tracker states reset.", mode);
     }
@@ -222,15 +245,12 @@ class Nodelet : public nodelet::Nodelet {
     land_q_.y() = msgPtr->pose.orientation.y;
     land_q_.z() = msgPtr->pose.orientation.z;
     land_triger_received_ = true;
+    force_plan_from_odom_ = true;
     ROS_INFO("\033[34m[TRACK]\033[0m Land trigger received.");
   }
 
   void preempt_callback(const std_msgs::Empty::ConstPtr& /*msgPtr*/) {
-    triger_received_ = false;
-    land_triger_received_ = false;
-    wait_hover_ = true;
-    force_hover_ = true;
-    last_trigger_stamp_ = ros::Time(0);
+    reset_tracker_runtime(false, true, "PREEMPT");
 
     TRACK_WARN("Preempt received, interrupted current task.");
     TRACK_STEP("S00 preempt handled -> trigger cleared, hover state reset.");
@@ -261,6 +281,76 @@ class Nodelet : public nodelet::Nodelet {
     gridmap_lock_.clear();
   }
 
+  bool read_odom_snapshot(PlannerSnapshot& snapshot) {
+    if (!odom_received_) {
+      return false;
+    }
+    while (odom_lock_.test_and_set())
+      ;
+    auto odom_msg = odom_msg_;
+    odom_lock_.clear();
+    snapshot.odom_p = Eigen::Vector3d(odom_msg.pose.pose.position.x,
+                                      odom_msg.pose.pose.position.y,
+                                      odom_msg.pose.pose.position.z);
+    snapshot.odom_v = Eigen::Vector3d(odom_msg.twist.twist.linear.x,
+                                      odom_msg.twist.twist.linear.y,
+                                      odom_msg.twist.twist.linear.z);
+    snapshot.odom_q = Eigen::Quaterniond(odom_msg.pose.pose.orientation.w,
+                                         odom_msg.pose.pose.orientation.x,
+                                         odom_msg.pose.pose.orientation.y,
+                                         odom_msg.pose.pose.orientation.z);
+    return true;
+  }
+
+  bool read_target_snapshot(PlannerSnapshot& snapshot) {
+    if (!target_received_) {
+      return false;
+    }
+    while (target_lock_.test_and_set())
+      ;
+    replanStateMsg_.target = target_msg_;
+    target_lock_.clear();
+
+    snapshot.target_p = Eigen::Vector3d(replanStateMsg_.target.pose.pose.position.x,
+                                        replanStateMsg_.target.pose.pose.position.y,
+                                        replanStateMsg_.target.pose.pose.position.z);
+    snapshot.target_v = Eigen::Vector3d(replanStateMsg_.target.twist.twist.linear.x,
+                                        replanStateMsg_.target.twist.twist.linear.y,
+                                        replanStateMsg_.target.twist.twist.linear.z);
+    snapshot.target_q = Eigen::Quaterniond(replanStateMsg_.target.pose.pose.orientation.w,
+                                           replanStateMsg_.target.pose.pose.orientation.x,
+                                           replanStateMsg_.target.pose.pose.orientation.y,
+                                           replanStateMsg_.target.pose.pose.orientation.z);
+    return true;
+  }
+
+  bool can_continue_previous_task(const ros::Time& replan_stamp, double& replan_t) {
+    if (force_plan_from_odom_ || force_hover_ || !have_active_traj_) {
+      return false;
+    }
+    replan_t = (replan_stamp - replan_stamp_).toSec();
+    if (replan_t <= 0.0 || replan_t > traj_poly_.getTotalDuration()) {
+      return false;
+    }
+    return true;
+  }
+
+  void compose_initial_state(const PlannerSnapshot& snapshot, const ros::Time& replan_stamp, Eigen::MatrixXd& iniState) {
+    iniState.setZero(3, 3);
+
+    double replan_t = 0.0;
+    if (can_continue_previous_task(replan_stamp, replan_t)) {
+      iniState.col(0) = traj_poly_.getPos(replan_t);
+      iniState.col(1) = traj_poly_.getVel(replan_t);
+      iniState.col(2) = traj_poly_.getAcc(replan_t);
+      return;
+    }
+
+    // New round or cache unavailable: always re-anchor planning on the latest odom snapshot.
+    iniState.col(0) = snapshot.odom_p;
+    iniState.col(1) = snapshot.odom_v;
+  }
+
   bool trigger_active() {
     if (planner_mode_.load() != MODE_TRACKER) {
       return false;
@@ -274,11 +364,7 @@ class Nodelet : public nodelet::Nodelet {
     if ((ros::Time::now() - last_trigger_stamp_).toSec() <= trigger_hold_sec_) {
       return true;
     }
-    triger_received_ = false;
-    land_triger_received_ = false;
-    wait_hover_ = true;
-    force_hover_ = true;
-    publish_preempt_burst(1);
+    reset_tracker_runtime(true, true, "TRIGGER_EXPIRE");
     TRACK_STEP_THROTTLE(1.0, "S00 trigger expired (hold=%.2fs), tracker paused.", trigger_hold_sec_);
     return false;
   }
@@ -315,51 +401,29 @@ class Nodelet : public nodelet::Nodelet {
       return;
     }
     TRACK_STEP_THROTTLE(1.0, "S01 trigger active -> entering planner loop.");
-    if (!odom_received_) {
-      ROS_WARN_THROTTLE(1.0, "\033[34m[TRACK]\033[0m Trigger active but waiting for odom.");
-      return;
-    }
     if (!map_received_) {
       ROS_WARN_THROTTLE(1.0, "\033[34m[TRACK]\033[0m Trigger active but waiting for map (gridmap_inflate).");
       return;
     }
-    // obtain state of odom
-    while (odom_lock_.test_and_set())
-      ;
-    auto odom_msg = odom_msg_;
-    odom_lock_.clear();
-    Eigen::Vector3d odom_p(odom_msg.pose.pose.position.x,
-                           odom_msg.pose.pose.position.y,
-                           odom_msg.pose.pose.position.z);
-    Eigen::Vector3d odom_v(odom_msg.twist.twist.linear.x,
-                           odom_msg.twist.twist.linear.y,
-                           odom_msg.twist.twist.linear.z);
-    Eigen::Quaterniond odom_q(odom_msg.pose.pose.orientation.w,
-                              odom_msg.pose.pose.orientation.x,
-                              odom_msg.pose.pose.orientation.y,
-                              odom_msg.pose.pose.orientation.z);
-    if (!target_received_) {
+
+    PlannerSnapshot snapshot;
+    if (!read_odom_snapshot(snapshot)) {
+      ROS_WARN_THROTTLE(1.0, "\033[34m[TRACK]\033[0m Trigger active but waiting for odom.");
+      return;
+    }
+    if (!read_target_snapshot(snapshot)) {
       ROS_WARN_THROTTLE(
           1.0,
           "\033[34m[TRACK]\033[0m Trigger active but waiting for target odom. Check /target/odom -> target_ekf -> target_ekf_node/target_odom.");
       return;
     }
-    // NOTE obtain state of target
-    while (target_lock_.test_and_set())
-      ;
-    replanStateMsg_.target = target_msg_;
-    target_lock_.clear();
-    Eigen::Vector3d target_p(replanStateMsg_.target.pose.pose.position.x,
-                             replanStateMsg_.target.pose.pose.position.y,
-                             replanStateMsg_.target.pose.pose.position.z);
-    Eigen::Vector3d target_v(replanStateMsg_.target.twist.twist.linear.x,
-                             replanStateMsg_.target.twist.twist.linear.y,
-                             replanStateMsg_.target.twist.twist.linear.z);
-    Eigen::Quaterniond target_q;
-    target_q.w() = replanStateMsg_.target.pose.pose.orientation.w;
-    target_q.x() = replanStateMsg_.target.pose.pose.orientation.x;
-    target_q.y() = replanStateMsg_.target.pose.pose.orientation.y;
-    target_q.z() = replanStateMsg_.target.pose.pose.orientation.z;
+
+    const Eigen::Vector3d& odom_p = snapshot.odom_p;
+    const Eigen::Vector3d& odom_v = snapshot.odom_v;
+    const Eigen::Quaterniond& odom_q = snapshot.odom_q;
+    Eigen::Vector3d target_p = snapshot.target_p;
+    const Eigen::Vector3d& target_v = snapshot.target_v;
+    const Eigen::Quaterniond& target_q = snapshot.target_q;
     TRACK_STEP_THROTTLE(1.0, "S02 input ready: |odom_v|=%.2f, |target_v|=%.2f, dist=%.2f",
                         odom_v.norm(), target_v.norm(), (target_p - odom_p).norm());
 
@@ -448,19 +512,8 @@ class Nodelet : public nodelet::Nodelet {
 
     // NOTE replan state
     Eigen::MatrixXd iniState;
-    iniState.setZero(3, 3);
     ros::Time replan_stamp = ros::Time::now() + ros::Duration(0.03);
-    double replan_t = (replan_stamp - replan_stamp_).toSec();
-    if (force_hover_ || replan_t > traj_poly_.getTotalDuration()) {
-      // should replan from the hover state
-      iniState.col(0) = odom_p;
-      iniState.col(1) = odom_v;
-    } else {
-      // should replan from the last trajectory
-      iniState.col(0) = traj_poly_.getPos(replan_t);
-      iniState.col(1) = traj_poly_.getVel(replan_t);
-      iniState.col(2) = traj_poly_.getAcc(replan_t);
-    }
+    compose_initial_state(snapshot, replan_stamp, iniState);
     replanStateMsg_.header.stamp = ros::Time::now();
     replanStateMsg_.iniState.resize(9);
     Eigen::Map<Eigen::MatrixXd>(replanStateMsg_.iniState.data(), 3, 3) = iniState;
@@ -605,6 +658,8 @@ class Nodelet : public nodelet::Nodelet {
       TRACK_STEP_THROTTLE(2.0, "S09 publish trajectory success: traj_id=%d, yaw=%.2f", traj_id_ - 1, yaw);
       traj_poly_ = traj;
       replan_stamp_ = replan_stamp;
+      have_active_traj_ = true;
+      force_plan_from_odom_ = false;
     } else if (force_hover_) {
       publish_hovering_log();
       ROS_ERROR("[planner] REPLAN FAILED, HOVERING...");
@@ -612,21 +667,28 @@ class Nodelet : public nodelet::Nodelet {
       replanState_pub_.publish(replanStateMsg_);
       TRACK_STEP_THROTTLE(2.0, "S09 replan failed while force_hover=true -> keep hover.");
       return;
-    } else if (validcheck(traj_poly_, replan_stamp_)) {
+    } else if (have_active_traj_ && validcheck(traj_poly_, replan_stamp_)) {
       force_hover_ = true;
       ROS_FATAL("[planner] EMERGENCY STOP!!!");
       replanStateMsg_.state = 2;
       replanState_pub_.publish(replanStateMsg_);
-      pub_hover_p(iniState.col(0), replan_stamp);
+      pub_hover_p(odom_p, replan_stamp);
       publish_hovering_log();
       TRACK_STEP("S09 emergency stop issued -> publish hover command.");
       return;
-    } else {
+    } else if (have_active_traj_) {
       ROS_ERROR("[planner] REPLAN FAILED, EXECUTE LAST TRAJ...");
       replanStateMsg_.state = 3;
       replanState_pub_.publish(replanStateMsg_);
       TRACK_STEP_THROTTLE(2.0, "S09 replan failed -> continue executing last trajectory.");
       return;  // current generated traj invalid but last is valid
+    } else {
+      ROS_ERROR("[planner] REPLAN FAILED, no active traj cache -> keep hover.");
+      replanStateMsg_.state = 1;
+      replanState_pub_.publish(replanStateMsg_);
+      force_hover_ = true;
+      publish_hovering_log();
+      return;
     }
     visPtr_->visualize_traj(traj, "traj");
   }
@@ -636,25 +698,17 @@ class Nodelet : public nodelet::Nodelet {
     if (!trigger_active()) {
       return;
     }
-    if (!odom_received_) {
-      ROS_WARN_THROTTLE(1.0, "\033[34m[TRACK]\033[0m Trigger active but waiting for odom.");
-      return;
-    }
     if (!map_received_) {
       ROS_WARN_THROTTLE(1.0, "\033[34m[TRACK]\033[0m Trigger active but waiting for map (gridmap_inflate).");
       return;
     }
-    // obtain state of odom
-    while (odom_lock_.test_and_set())
-      ;
-    auto odom_msg = odom_msg_;
-    odom_lock_.clear();
-    Eigen::Vector3d odom_p(odom_msg.pose.pose.position.x,
-                           odom_msg.pose.pose.position.y,
-                           odom_msg.pose.pose.position.z);
-    Eigen::Vector3d odom_v(odom_msg.twist.twist.linear.x,
-                           odom_msg.twist.twist.linear.y,
-                           odom_msg.twist.twist.linear.z);
+    PlannerSnapshot snapshot;
+    if (!read_odom_snapshot(snapshot)) {
+      ROS_WARN_THROTTLE(1.0, "\033[34m[TRACK]\033[0m Trigger active but waiting for odom.");
+      return;
+    }
+    const Eigen::Vector3d& odom_p = snapshot.odom_p;
+    const Eigen::Vector3d& odom_v = snapshot.odom_v;
     // NOTE force-hover: waiting for the speed of drone small enough
     if (!should_release_force_hover(ros::Time::now(), odom_v.norm())) {
       return;
@@ -678,7 +732,7 @@ class Nodelet : public nodelet::Nodelet {
 
     // NOTE determin whether to replan
     bool no_need_replan = false;
-    if (!force_hover_ && !wait_hover_) {
+    if (!force_hover_ && !wait_hover_ && have_active_traj_) {
       double last_traj_t_rest = traj_poly_.getTotalDuration() - (ros::Time::now() - replan_stamp_).toSec();
       bool new_goal = (local_goal - traj_poly_.getPos(traj_poly_.getTotalDuration())).norm() > tracking_dist_;
       if (!new_goal) {
@@ -717,19 +771,8 @@ class Nodelet : public nodelet::Nodelet {
 
     // NOTE replan state
     Eigen::MatrixXd iniState;
-    iniState.setZero(3, 3);
     ros::Time replan_stamp = ros::Time::now() + ros::Duration(0.03);
-    double replan_t = (replan_stamp - replan_stamp_).toSec();
-    if (force_hover_ || replan_t > traj_poly_.getTotalDuration()) {
-      // should replan from the hover state
-      iniState.col(0) = odom_p;
-      iniState.col(1) = odom_v;
-    } else {
-      // should replan from the last trajectory
-      iniState.col(0) = traj_poly_.getPos(replan_t);
-      iniState.col(1) = traj_poly_.getVel(replan_t);
-      iniState.col(2) = traj_poly_.getAcc(replan_t);
-    }
+    compose_initial_state(snapshot, replan_stamp, iniState);
     replanStateMsg_.header.stamp = ros::Time::now();
     replanStateMsg_.iniState.resize(9);
     Eigen::Map<Eigen::MatrixXd>(replanStateMsg_.iniState.data(), 3, 3) = iniState;
@@ -799,18 +842,20 @@ class Nodelet : public nodelet::Nodelet {
       pub_traj(traj, yaw, replan_stamp);
       traj_poly_ = traj;
       replan_stamp_ = replan_stamp;
+      have_active_traj_ = true;
+      force_plan_from_odom_ = false;
     } else if (force_hover_) {
       publish_hovering_log();
       ROS_ERROR("[planner] REPLAN FAILED, HOVERING...");
       replanStateMsg_.state = 1;
       replanState_pub_.publish(replanStateMsg_);
       return;
-    } else if (!validcheck(traj_poly_, replan_stamp_)) {
+    } else if (!have_active_traj_ || !validcheck(traj_poly_, replan_stamp_)) {
       force_hover_ = true;
       ROS_FATAL("[planner] EMERGENCY STOP!!!");
       replanStateMsg_.state = 2;
       replanState_pub_.publish(replanStateMsg_);
-      pub_hover_p(iniState.col(0), replan_stamp);
+      pub_hover_p(odom_p, replan_stamp);
       publish_hovering_log();
       return;
     } else {
@@ -967,6 +1012,7 @@ class Nodelet : public nodelet::Nodelet {
     int initial_mode = 0;
     nh.param("initial_mode", initial_mode, 0);
     planner_mode_ = initial_mode;
+    clear_planning_session_cache("INIT");
 
     gridmapPtr_ = std::make_shared<mapping::OccGridMap>();
     envPtr_ = std::make_shared<env::Env>(nh, gridmapPtr_);
