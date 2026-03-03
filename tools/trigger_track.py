@@ -3,8 +3,9 @@
 Trigger track module directly.
 
 Default behavior:
-1) publish /track_trigger once
-2) publish fake target-odom + ego-odom continuously
+1) publish mode=2 to /uav_planner/trigger
+2) publish /tracker_trigger once
+3) publish fake target-odom + ego-odom continuously
 
 Set --no-fake-inputs to only send trigger messages.
 """
@@ -15,6 +16,7 @@ import copy
 import rospy
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry
+from std_msgs.msg import Int32
 
 TRACK_TAG = "\033[34m[TRACK]\033[0m"
 
@@ -81,7 +83,9 @@ def build_trigger_msg():
 
 def main():
     parser = argparse.ArgumentParser(description="Trigger track with optional fake inputs")
-    parser.add_argument("--trigger-topic", default="/track_trigger")
+    parser.add_argument("--mode-topic", default="/uav_planner/trigger")
+    parser.add_argument("--mode-value", type=int, default=2)
+    parser.add_argument("--trigger-topic", default="/tracker_trigger")
     parser.add_argument("--trigger-rate", type=float, default=5.0)
     parser.add_argument("--trigger-repeat", type=int, default=1)
 
@@ -108,7 +112,10 @@ def main():
     rospy.init_node("trigger_track", anonymous=True)
     rospy.loginfo("%s Trigger requested", TRACK_TAG)
 
-    checks = [topic_type_compatible(args.trigger_topic, "geometry_msgs/PoseStamped")]
+    checks = [
+        topic_type_compatible(args.mode_topic, "std_msgs/Int32"),
+        topic_type_compatible(args.trigger_topic, "geometry_msgs/PoseStamped"),
+    ]
     if args.fake_inputs:
         checks.extend(
             [
@@ -120,6 +127,7 @@ def main():
         rospy.logerr("Pre-check failed. Abort.")
         return
 
+    mode_pub = rospy.Publisher(args.mode_topic, Int32, queue_size=10)
     trigger_pub = rospy.Publisher(args.trigger_topic, PoseStamped, queue_size=10)
     yolo_pub = rospy.Publisher(args.yolo_topic, Odometry, queue_size=20)
     odom_pub = rospy.Publisher(args.odom_topic, Odometry, queue_size=20)
@@ -177,6 +185,12 @@ def main():
         max(1, int(args.trigger_repeat)),
         args.trigger_rate,
     )
+    rospy.loginfo(
+        "%s Publishing mode trigger %d on %s",
+        TRACK_TAG,
+        int(args.mode_value),
+        args.mode_topic,
+    )
     if args.fake_inputs:
         rospy.loginfo(
             "%s Publishing fake track inputs to %s and %s at %.2f Hz (source odom: %s)",
@@ -193,6 +207,13 @@ def main():
     trigger_period = 1.0 / max(1.0, float(args.trigger_rate))
     fake_period = 1.0 / max(1.0, float(args.rate))
     last_fake = 0.0
+
+    mode_msg = Int32(data=int(args.mode_value))
+    for _ in range(3):
+        if rospy.is_shutdown():
+            return
+        mode_pub.publish(mode_msg)
+        rospy.sleep(0.03)
 
     trigger_msg = build_trigger_msg()
     for _ in range(max(1, int(args.trigger_repeat))):

@@ -14,20 +14,22 @@ declare -A WS_PATHS
 WS_PATHS[ego]="$PROJECT_ROOT/ego-planner"
 WS_PATHS[track]="$PROJECT_ROOT/Elastic-Tracker"
 WS_PATHS[perch]="$PROJECT_ROOT/Fast-Perching"
+WS_PATHS[uav]="$PROJECT_ROOT/uav-planner"
 
-WORKSPACE_ORDER=(ego track perch)
+WORKSPACE_ORDER=(ego track perch uav)
 
 usage() {
     cat <<'EOF'
 Usage:
   bash scripts/build_ws.sh
-  bash scripts/build_ws.sh [all|ego|track|perch ...] [--clean] [--jobs N]
+  bash scripts/build_ws.sh [all|ego|track|perch|uav ...] [--clean] [--jobs N]
 
 Examples:
   bash scripts/build_ws.sh
   bash scripts/build_ws.sh all
   bash scripts/build_ws.sh ego perch --jobs 8
   bash scripts/build_ws.sh track --clean
+  bash scripts/build_ws.sh uav
 
 Notes:
   - No positional args: interactive selection mode.
@@ -56,6 +58,7 @@ select_interactive() {
     echo "  1) ego-planner"
     echo "  2) Elastic-Tracker"
     echo "  3) Fast-Perching"
+    echo "  4) uav-planner (ego + tracker integrated)"
     echo "  a) all"
     echo "  q) quit"
     echo ""
@@ -72,6 +75,9 @@ select_interactive() {
                 ;;
             3|perch|fast|fast-perching)
                 append_unique perch
+                ;;
+            4|uav|uav-planner|integrated)
+                append_unique uav
                 ;;
             a|all)
                 add_all
@@ -121,6 +127,10 @@ parse_args() {
                 ;;
             perch|fast|fast-perching)
                 append_unique perch
+                shift
+                ;;
+            uav|uav-planner|integrated)
+                append_unique uav
                 shift
                 ;;
             *)

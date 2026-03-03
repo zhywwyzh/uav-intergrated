@@ -29,6 +29,10 @@ catkin_make
 cd Fast-Perching
 catkin_make
 ```
+> Or compile integrated ego+tracker workspace (`uav-planner`)
+```
+bash scripts/build_ws.sh uav
+```
 > Grant bash files permissions
 ```
 chmod +x scripts/mix.sh
@@ -46,6 +50,10 @@ chmod +x scripts/stop_all.sh
 > Trigger modules by direct topics/tools
 ```
 ./scripts/task_pub.sh
+```
+> Unified mode trigger topic
+```
+/uav_planner/trigger   # std_msgs/Int32: 1=ego, 2=tracker
 ```
 > (Optional) direct trigger examples
 ```

@@ -1,0 +1,61 @@
+<launch>
+  <arg name="module_ns" default="track"/>
+  <arg name="odom_topic" default="/track_ekf/ekf_odom"/>
+  <arg name="yolo_topic" default="/target/odom"/>
+  <arg name="local_map_topic" default="/drone_0_ego_planner_node/grid_map/occupancy_inflate"/>
+  <arg name="trigger_topic" default="/tracker_trigger"/>
+  <arg name="land_trigger_topic" default="/track_land_trigger"/>
+  <arg name="preempt_topic" default="/tracker_preempt"/>
+  <arg name="mode_trigger_topic" default="/uav_planner/trigger"/>
+  <arg name="position_cmd_topic" default="/tracker_planning/pos_cmd"/>
+  <arg name="map_x_length" default="80.0"/>
+  <arg name="map_y_length" default="80.0"/>
+  <arg name="map_z_length" default="8.0"/>
+  <arg name="map_resolution" default="0.15"/>
+  <!-- ego local map topic is already inflated; keep additional inflation disabled by default -->
+  <arg name="inflate_size" default="0"/>
+
+  <group ns="$(arg module_ns)">
+    <node pkg="nodelet" type="nodelet" name="manager" args="manager" output="screen">
+      <param name="num_worker_threads" value="16"/>
+    </node>
+
+    <node pkg="target_ekf" name="target_ekf_node" type="target_ekf_sim_node" output="screen">
+      <rosparam command="load" file="$(find target_ekf)/config/camera.yaml" />
+      <param name="pitch_thr" value="37"/>
+      <remap from="~yolo" to="$(arg yolo_topic)"/>
+      <remap from="~odom" to="$(arg odom_topic)"/>
+    </node>
+
+    <node pkg="nodelet" type="nodelet" name="mapping" args="load mapping/Nodelet manager" output="screen">
+      <param name="use_global_map" value="true"/>
+      <param name="global_map_continuous_update" value="true"/>
+      <param name="x_length" value="$(arg map_x_length)"/>
+      <param name="y_length" value="$(arg map_y_length)"/>
+      <param name="z_length" value="$(arg map_z_length)"/>
+      <param name="resolution" value="$(arg map_resolution)"/>
+      <param name="inflate_size" value="$(arg inflate_size)"/>
+      <param name="use_mask" value="true"/>
+      <remap from="~global_map" to="$(arg local_map_topic)"/>
+      <remap from="~target" to="target_ekf_node/target_odom"/>
+      <remap from="~gridmap_inflate" to="gridmap_inflate"/>
+    </node>
+
+    <node name="mapping_vis" pkg="mapping" type="mapping_vis_node">
+      <remap from="~gridmap" to="gridmap"/>
+      <remap from="~gridmap_inflate" to="gridmap_inflate"/>
+    </node>
+
+    <include file="$(find planning)/launch/planning.launch">
+      <arg name="rhosVisibility_" value="10000.0"/>
+      <arg name="rhoTracking_" value="1000.0"/>
+      <arg name="target_name_" value="target_ekf_node/target_odom"/>
+      <arg name="odom_topic" value="$(arg odom_topic)"/>
+      <arg name="trigger_topic" value="$(arg trigger_topic)"/>
+      <arg name="land_trigger_topic" value="$(arg land_trigger_topic)"/>
+      <arg name="preempt_topic" value="$(arg preempt_topic)"/>
+      <arg name="mode_trigger_topic" value="$(arg mode_trigger_topic)"/>
+      <arg name="position_cmd_topic" value="$(arg position_cmd_topic)"/>
+    </include>
+  </group>
+</launch>

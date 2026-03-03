@@ -3,9 +3,10 @@
 Trigger track and publish a dynamic target odom trajectory.
 
 Default behavior:
-1) publish /track_trigger once
-2) publish /target/odom and /track_ekf/ekf_odom for 10s
-3) target moves at 0.5 m/s along +45 deg in XY plane
+1) publish mode=2 to /uav_planner/trigger
+2) publish /tracker_trigger once
+3) publish /target/odom and /track_ekf/ekf_odom for 10s
+4) target moves at 0.5 m/s along +45 deg in XY plane
 """
 
 import argparse
@@ -16,6 +17,7 @@ import rospy
 from rosgraph import Master
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry
+from std_msgs.msg import Int32
 
 DYN_TRACK_TAG = "\033[34m[DYN-TRACK]\033[0m"
 
@@ -64,7 +66,7 @@ def topic_subscriber_count(topic_name):
 
 
 def resolve_odom_topic(preferred_topic):
-    candidates = [preferred_topic, "/ekf/ekf_odom", "/track_ekf/ekf_odom"]
+    candidates = [preferred_topic, "/track_ekf/ekf_odom"]
     checked = []
     for topic in candidates:
         if topic in checked:
@@ -112,12 +114,14 @@ def build_odom(base, frame_id):
 
 def main():
     parser = argparse.ArgumentParser(description="Trigger track with dynamic target odom")
-    parser.add_argument("--trigger-topic", default="/track_trigger")
+    parser.add_argument("--mode-topic", default="/uav_planner/trigger")
+    parser.add_argument("--mode-value", type=int, default=2)
+    parser.add_argument("--trigger-topic", default="/tracker_trigger")
     parser.add_argument("--trigger-rate", type=float, default=5.0)
     parser.add_argument("--trigger-repeat", type=int, default=1)
 
     parser.add_argument("--target-topic", default="/target/odom")
-    parser.add_argument("--odom-topic", default="/ekf/ekf_odom")
+    parser.add_argument("--odom-topic", default="/track_ekf/ekf_odom")
     parser.add_argument("--auto-resolve-odom-topic", dest="auto_resolve_odom_topic", action="store_true")
     parser.add_argument("--no-auto-resolve-odom-topic", dest="auto_resolve_odom_topic", action="store_false")
     parser.set_defaults(auto_resolve_odom_topic=False)
@@ -166,6 +170,7 @@ def main():
         log_odom_topic_state(args.odom_topic, "resolved odom topic")
 
     checks = [
+        topic_type_compatible(args.mode_topic, "std_msgs/Int32"),
         topic_type_compatible(args.trigger_topic, "geometry_msgs/PoseStamped"),
         topic_type_compatible(args.target_topic, "nav_msgs/Odometry"),
         topic_type_compatible(args.odom_topic, "nav_msgs/Odometry"),
@@ -174,6 +179,7 @@ def main():
         rospy.logerr("Pre-check failed. Abort.")
         return
 
+    mode_pub = rospy.Publisher(args.mode_topic, Int32, queue_size=10)
     trigger_pub = rospy.Publisher(args.trigger_topic, PoseStamped, queue_size=10)
     target_pub = rospy.Publisher(args.target_topic, Odometry, queue_size=20)
     odom_pub = rospy.Publisher(args.odom_topic, Odometry, queue_size=20)
@@ -232,6 +238,12 @@ def main():
 
     trigger_period = 1.0 / max(1.0, float(args.trigger_rate))
     trigger_msg = build_trigger_msg()
+    mode_msg = Int32(data=int(args.mode_value))
+    for _ in range(3):
+        if rospy.is_shutdown():
+            return
+        mode_pub.publish(mode_msg)
+        rospy.sleep(0.03)
     for _ in range(max(1, int(args.trigger_repeat))):
         if rospy.is_shutdown():
             return

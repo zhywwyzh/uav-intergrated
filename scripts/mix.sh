@@ -9,12 +9,16 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+UAV_WS="$PROJECT_ROOT/uav-planner"
+UAV_DEVEL_SPACE="${UAV_DEVEL_SPACE:-devel}"
 TMP_DIR="$PROJECT_ROOT/tmp"
 mkdir -p "$TMP_DIR"
 MIX_PID_FILE="$TMP_DIR/mix.pid"
 echo $$ > "$MIX_PID_FILE"
 
-echo "=== Main Control Script Starting (Preempt-trigger mode) ==="
+USE_LEGACY_ARBITER="${USE_LEGACY_ARBITER:-0}"
+
+echo "=== Main Control Script Starting (Unified mode-trigger) ==="
 echo ""
 
 # PID file paths
@@ -23,8 +27,6 @@ TRACK_PID_FILE="$TMP_DIR/track_real.pid"
 PERCHING_PID_FILE="$TMP_DIR/perching.pid"
 ARBITER_PID_FILE="$TMP_DIR/task_trigger_arbiter.pid"
 
-# Startup script PID files
-START_TRACK_PID_FILE="$TMP_DIR/start_track.pid"
 START_PERCH_PID_FILE="$TMP_DIR/start_perch.pid"
 
 EGO_PLANNING_SERVICE="/drone_0_ego_planner_node/planning/enable"
@@ -32,18 +34,6 @@ EGO_PLANNING_SERVICE="/drone_0_ego_planner_node/planning/enable"
 cleanup() {
     echo ""
     echo "=== Received interrupt signal, starting cleanup... ==="
-
-    # stop startup wrappers
-    if [ -f "$START_TRACK_PID_FILE" ]; then
-        START_TRACK_PID=$(cat "$START_TRACK_PID_FILE" 2>/dev/null)
-        if [ ! -z "$START_TRACK_PID" ] && kill -0 "$START_TRACK_PID" 2>/dev/null; then
-            echo "  Terminating start_track.sh process (PID: $START_TRACK_PID)"
-            kill -TERM "$START_TRACK_PID" 2>/dev/null
-            sleep 0.2
-            kill -KILL "$START_TRACK_PID" 2>/dev/null
-        fi
-        rm -f "$START_TRACK_PID_FILE"
-    fi
 
     if [ -f "$START_PERCH_PID_FILE" ]; then
         START_PERCH_PID=$(cat "$START_PERCH_PID_FILE" 2>/dev/null)
@@ -104,8 +94,17 @@ set_ego_planning_state() {
     return 1
 }
 
+source_uav_ws() {
+    if [ ! -f "$UAV_WS/$UAV_DEVEL_SPACE/setup.sh" ]; then
+        echo "  Error: missing $UAV_WS/$UAV_DEVEL_SPACE/setup.sh. Build uav-planner first."
+        return 1
+    fi
+    # shellcheck disable=SC1090
+    source "$UAV_WS/$UAV_DEVEL_SPACE/setup.sh"
+}
+
 start_ego_mapping() {
-    echo "Starting ego-planner mapping (planning disabled)..."
+    echo "Starting uav-planner ego mapping (planning disabled)..."
 
     local run_pid=""
     if [ -f "$EGO_RUN_PID_FILE" ]; then
@@ -117,8 +116,8 @@ start_ego_mapping() {
         return 0
     fi
 
-    cd "$PROJECT_ROOT/ego-planner" || return 1
-    source devel/setup.sh
+    cd "$UAV_WS" || return 1
+    source_uav_ws || return 1
 
     rm -f "$EGO_RUN_PID_FILE"
     roslaunch mission_fsm multidrone_sim.launch &
@@ -145,11 +144,62 @@ ensure_ego_mapping_running() {
 }
 
 start_track() {
-    rm -f "$START_TRACK_PID_FILE"
-    "$SCRIPT_DIR/start_track.sh" &
-    START_TRACK_PID=$!
-    echo $START_TRACK_PID > "$START_TRACK_PID_FILE"
-    echo "  start_track.sh started (PID: $START_TRACK_PID)"
+    echo "Starting tracker from uav-planner (standby)..."
+
+    local track_pid=""
+    if [ -f "$TRACK_PID_FILE" ]; then
+        track_pid=$(cat "$TRACK_PID_FILE" 2>/dev/null)
+    fi
+    if [ ! -z "$track_pid" ] && kill -0 "$track_pid" 2>/dev/null; then
+        echo "  tracker real_external.launch already running (PID: $track_pid)"
+        return 0
+    fi
+
+    local yolo_topic="${YOLO_TOPIC:-/target/odom}"
+    local odom_topic="${ODOM_TOPIC:-/track_ekf/ekf_odom}"
+    local local_map_topic="${LOCAL_MAP_TOPIC:-/drone_0_ego_planner_node/grid_map/occupancy_inflate}"
+    local track_trigger_topic="${TRACK_TRIGGER_TOPIC:-/tracker_trigger}"
+    local track_preempt_topic="${TRACK_PREEMPT_TOPIC:-/tracker_preempt}"
+    local track_mode_trigger_topic="${TRACK_MODE_TRIGGER_TOPIC:-/uav_planner/trigger}"
+    local track_position_cmd_topic="${TRACK_POSITION_CMD_TOPIC:-/tracker_planning/pos_cmd}"
+    local auto_track_trigger="${AUTO_TRACK_TRIGGER:-0}"
+
+    cd "$UAV_WS" || return 1
+    source_uav_ws || return 1
+
+    rm -f "$TRACK_PID_FILE"
+    roslaunch planning real_external.launch \
+        yolo_topic:="$yolo_topic" \
+        odom_topic:="$odom_topic" \
+        local_map_topic:="$local_map_topic" \
+        trigger_topic:="$track_trigger_topic" \
+        preempt_topic:="$track_preempt_topic" \
+        mode_trigger_topic:="$track_mode_trigger_topic" \
+        position_cmd_topic:="$track_position_cmd_topic" &
+    TRACK_PID=$!
+    echo "$TRACK_PID" > "$TRACK_PID_FILE"
+    echo "  planning real_external.launch started (PID: $TRACK_PID)"
+
+    if [ "$auto_track_trigger" = "1" ]; then
+        rostopic pub -1 "$track_trigger_topic" geometry_msgs/PoseStamped "header:
+  seq: 0
+  stamp:
+    secs: 0
+    nsecs: 0
+  frame_id: ''
+pose:
+  position:
+    x: 0.0
+    y: 0.0
+    z: 0.0
+  orientation:
+    x: 0.0
+    y: 0.0
+    z: 0.0
+    w: 0.0" >/dev/null 2>&1 || true
+    fi
+
+    cd "$PROJECT_ROOT" || return 1
 }
 
 ensure_track_process_running() {
@@ -159,15 +209,6 @@ ensure_track_process_running() {
     fi
 
     if [ ! -z "$track_pid" ] && kill -0 "$track_pid" 2>/dev/null; then
-        return 0
-    fi
-
-    # start wrapper may still be bringing up launch process
-    local start_track_pid=""
-    if [ -f "$START_TRACK_PID_FILE" ]; then
-        start_track_pid=$(cat "$START_TRACK_PID_FILE" 2>/dev/null)
-    fi
-    if [ ! -z "$start_track_pid" ] && kill -0 "$start_track_pid" 2>/dev/null; then
         return 0
     fi
 
@@ -223,8 +264,8 @@ start_trigger_arbiter() {
     pkill -f "task_trigger_arbiter.py" 2>/dev/null || true
     sleep 0.2
 
-    cd "$PROJECT_ROOT/ego-planner" || return 1
-    source devel/setup.sh
+    cd "$UAV_WS" || return 1
+    source_uav_ws || return 1
     cd "$PROJECT_ROOT" || return 1
 
     rm -f "$ARBITER_PID_FILE"
@@ -248,7 +289,6 @@ ensure_trigger_arbiter_running() {
 
 echo "1. Cleaning stale PID files..."
 rm -f \
-    "$START_TRACK_PID_FILE" \
     "$START_PERCH_PID_FILE" \
     "$TRACK_PID_FILE" \
     "$EGO_RUN_PID_FILE" \
@@ -267,12 +307,16 @@ echo "4. Starting perching runtime (standby)..."
 start_perch
 sleep 1
 
-echo "5. Starting trigger arbiter (preempt dispatcher)..."
-start_trigger_arbiter
-sleep 1
+if [ "$USE_LEGACY_ARBITER" = "1" ]; then
+    echo "5. Starting legacy trigger arbiter (compatibility mode)..."
+    start_trigger_arbiter
+    sleep 1
+else
+    echo "5. Skip legacy trigger arbiter; mode switching is in ego FSM (/uav_planner/trigger)."
+fi
 
 echo ""
-echo "=== All runtimes are up (preempt trigger dispatcher) ==="
+echo "=== All runtimes are up (mode-trigger dispatcher in ego FSM) ==="
 echo "Use tools/trigger_*.py to trigger ego/track/perch directly."
 echo "Press Ctrl+C to stop all."
 echo ""
@@ -281,6 +325,8 @@ while true; do
     ensure_ego_mapping_running
     ensure_track_process_running
     ensure_perch_process_running
-    ensure_trigger_arbiter_running
+    if [ "$USE_LEGACY_ARBITER" = "1" ]; then
+        ensure_trigger_arbiter_running
+    fi
     sleep 1
 done

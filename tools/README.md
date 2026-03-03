@@ -3,12 +3,12 @@
 ## Trigger scripts for `scripts/mix.sh`
 
 - `trigger_ego.py`
-  - Enable ego planning service, then publish one `GoalSet` trigger to `/ego_trigger`.
+  - Publish mode trigger `Int32(1)` to `/uav_planner/trigger`, enable ego planning service, then publish one `GoalSet` to `/goal_with_id_from_station`.
   - Example:
     - `python3 tools/trigger_ego.py --x 2.0 --y 1.0 --z 1.2 --yaw 0.0`
 
 - `trigger_track.py`
-  - Publish `/track_trigger` directly (default one-shot trigger).
+  - Publish mode trigger `Int32(2)` to `/uav_planner/trigger`, then publish `/tracker_trigger` (default one-shot trigger).
   - By default also publishes fake target odom (`nav_msgs/Odometry`) + ego odom.
   - Example:
     - `python3 tools/trigger_track.py`
@@ -32,10 +32,10 @@
   - Example:
     - `bash scripts/stop_all.sh`
 
-## Trigger preemption
+## Unified mode trigger
 
-- `scripts/mix.sh` now starts `utils/task_trigger_arbiter.py`.
-- Any new trigger (`/ego_trigger` or `/goal_with_id_from_station`, `/track_trigger`, `/perch_trigger`) will preempt current tasks first, then execute the latest trigger.
+- `ego_replan_fsm` subscribes `/uav_planner/trigger` (`std_msgs/Int32`).
+- `1` switches to ego planning logic; `2` switches to tracker planning logic.
 
 ## Interactive trigger menu
 
