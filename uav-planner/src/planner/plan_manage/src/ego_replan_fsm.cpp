@@ -24,6 +24,7 @@ namespace ego_planner
     switch_latched_         = false;
     have_tracker_heartbeat_ = false;
     tracker_replan_state_   = -2;
+    tracker_mode_state_     = MODE_IDLE;
     tracker_land_requested_ = false;
     yaw_cmd_.des_yaw        = 0.0;
     yaw_cmd_.yaw_reach      = true;
@@ -42,6 +43,7 @@ namespace ego_planner
     nh.param<std::string>("fsm/tracker_heartbeat_topic", tracker_heartbeat_topic_, std::string("/track/heartbeat"));
     nh.param<std::string>("fsm/tracker_replan_state_topic", tracker_replan_state_topic_, std::string("/track/replanState"));
     nh.param<std::string>("fsm/tracker_land_trigger_topic", tracker_land_trigger_topic_, std::string("/track_land_trigger"));
+    nh.param<std::string>("fsm/tracker_mode_state_topic", tracker_mode_state_topic_, std::string("/track/mode_state"));
 
     nh.param("fsm/waypoint_num", waypoint_num_, -1);
     for (int i = 0; i < waypoint_num_; i++)
@@ -73,6 +75,7 @@ namespace ego_planner
     mode_trigger_sub_ = nh.subscribe(mode_trigger_topic_, 10, &EGOReplanFSM::modeTriggerCallback, this);
     tracker_heartbeat_sub_ = nh.subscribe(tracker_heartbeat_topic_, 20, &EGOReplanFSM::trackerHeartbeatCallback, this);
     tracker_replan_state_sub_ = nh.subscribe(tracker_replan_state_topic_, 20, &EGOReplanFSM::trackerReplanStateCallback, this);
+    tracker_mode_state_sub_ = nh.subscribe(tracker_mode_state_topic_, 20, &EGOReplanFSM::trackerModeStateCallback, this);
     tracker_land_trigger_sub_ = nh.subscribe(tracker_land_trigger_topic_, 10, &EGOReplanFSM::trackerLandTriggerCallback, this);
 
     /* Use MINCO trajectory to minimize the message size in wireless communication */
@@ -185,6 +188,13 @@ namespace ego_planner
 
       if (have_odom_ && odom_vel_.norm() > 0.2)
       {
+        goto force_return;
+      }
+
+      // tracker -> ego: wait until tracker explicitly reports it has exited
+      if (planner_mode_ == MODE_EGO && tracker_mode_state_ == MODE_TRACKER)
+      {
+        ROS_WARN_THROTTLE(1.0, "\033[32m[EGO]\033[0m Waiting tracker mode exit before enabling EGO.");
         goto force_return;
       }
 
@@ -1473,13 +1483,13 @@ namespace ego_planner
     {
       command_stop_ = false;
       tracker_land_requested_ = false;
-      ROS_INFO("\033[32m[EGO]\033[0m Mode trigger=%d -> EGO planner active.", trigger_mode);
+      ROS_INFO("\033[32m[EGO]\033[0m Mode trigger=%d -> EGO planner requested.", trigger_mode);
     }
     else
     {
       have_trigger_ = false;
       tracker_land_requested_ = false;
-      ROS_INFO("\033[32m[EGO]\033[0m Mode trigger=%d -> TRACKER planner active.", trigger_mode);
+      ROS_INFO("\033[32m[EGO]\033[0m Mode trigger=%d -> TRACKER planner requested.", trigger_mode);
     }
 
     if (exec_state_ != MODE_SWITCH_PREPARE && exec_state_ != COMMAND_STOP && exec_state_ != EMERGENCY_STOP)
@@ -1498,6 +1508,11 @@ namespace ego_planner
   void EGOReplanFSM::trackerReplanStateCallback(const quadrotor_msgs::ReplanState::ConstPtr &msg)
   {
     tracker_replan_state_ = msg->state;
+  }
+
+  void EGOReplanFSM::trackerModeStateCallback(const std_msgs::Int32::ConstPtr &msg)
+  {
+    tracker_mode_state_ = msg->data;
   }
 
   void EGOReplanFSM::trackerLandTriggerCallback(const geometry_msgs::PoseStampedConstPtr &msg)

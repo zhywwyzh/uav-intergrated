@@ -127,9 +127,10 @@ namespace ego_planner
     ros::Time last_tracker_heartbeat_{ros::Time(0)};
     bool have_tracker_heartbeat_;
     int tracker_replan_state_;
+    int tracker_mode_state_;
     bool tracker_land_requested_;
     double tracker_heartbeat_timeout_;
-    string mode_trigger_topic_, tracker_heartbeat_topic_, tracker_replan_state_topic_, tracker_land_trigger_topic_;
+    string mode_trigger_topic_, tracker_heartbeat_topic_, tracker_replan_state_topic_, tracker_land_trigger_topic_, tracker_mode_state_topic_;
 
     bool have_trigger_, have_target_, have_odom_, cur_traj_to_cur_target_, have_recv_pre_agent_, touch_goal_, mandatory_stop_, command_stop_;
     bool has_been_modified_;
@@ -148,7 +149,7 @@ namespace ego_planner
     ros::NodeHandle node_;
     ros::Timer exec_timer_, safety_timer_;
     ros::Subscriber waypoint_sub_, odom_sub_, trigger_sub_, broadcast_ploytraj_sub_, mandatory_stop_sub_, command_sub_, mode_trigger_sub_;
-    ros::Subscriber tracker_heartbeat_sub_, tracker_replan_state_sub_, tracker_land_trigger_sub_;
+    ros::Subscriber tracker_heartbeat_sub_, tracker_replan_state_sub_, tracker_land_trigger_sub_, tracker_mode_state_sub_;
     ros::Publisher data_disp_pub_, broadcast_ploytraj_pub_, ground_height_pub_, state_pub_, ego_state_trigger_pub_;
     ros::Publisher ego_plan_state_pub_;
 
@@ -184,6 +185,7 @@ namespace ego_planner
     void modeTriggerCallback(const std_msgs::Int32::ConstPtr &msg);
     void trackerHeartbeatCallback(const std_msgs::Empty::ConstPtr &msg);
     void trackerReplanStateCallback(const quadrotor_msgs::ReplanState::ConstPtr &msg);
+    void trackerModeStateCallback(const std_msgs::Int32::ConstPtr &msg);
     void trackerLandTriggerCallback(const geometry_msgs::PoseStampedConstPtr &msg);
     void RecvBroadcastMINCOTrajCallback(const traj_utils::MINCOTrajConstPtr &msg);
     void polyTraj2ROSMsg(traj_utils::PolyTraj *poly_msg, traj_utils::MINCOTraj *MINCO_msg);

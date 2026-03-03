@@ -150,7 +150,7 @@ def main():
     parser.add_argument("--heading-deg", type=float, default=45.0, help="used only when --direction heading")
 
     parser.add_argument("--frame-id", default="world")
-    parser.add_argument("--start-offset-x", type=float, default=5.0)
+    parser.add_argument("--start-offset-x", type=float, default=3.0)
     parser.add_argument("--start-offset-y", type=float, default=0.0)
     parser.add_argument("--start-offset-z", type=float, default=0.0)
     args = parser.parse_args()

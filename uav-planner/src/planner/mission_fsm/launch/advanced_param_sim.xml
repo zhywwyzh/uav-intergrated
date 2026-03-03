@@ -58,6 +58,7 @@
         <param name="fsm/mode_trigger_topic" value="/uav_planner/trigger" type="string"/>
         <param name="fsm/tracker_heartbeat_topic" value="/track/heartbeat" type="string"/>
         <param name="fsm/tracker_replan_state_topic" value="/track/replanState" type="string"/>
+        <param name="fsm/tracker_mode_state_topic" value="/track/mode_state" type="string"/>
         <param name="fsm/tracker_land_trigger_topic" value="/track_land_trigger" type="string"/>
         <param name="fsm/tracker_heartbeat_timeout" value="1.0" type="double"/>
 

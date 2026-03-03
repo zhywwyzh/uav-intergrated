@@ -38,11 +38,15 @@ Eigen::IOFormat CommaInitFmt(Eigen::StreamPrecision, Eigen::DontAlignCols, ", ",
 
 class Nodelet : public nodelet::Nodelet {
  private:
+  static constexpr int MODE_IDLE = 0;
+  static constexpr int MODE_EGO = 1;
+  static constexpr int MODE_TRACKER = 2;
+
   std::thread initThread_;
   ros::Subscriber gridmap_sub_, odom_sub_, target_sub_, triger_sub_, land_triger_sub_, preempt_sub_, mode_trigger_sub_;
   ros::Timer plan_timer_;
 
-  ros::Publisher traj_pub_, heartbeat_pub_, replanState_pub_, hover_log_pub_, preempt_pub_;
+  ros::Publisher traj_pub_, heartbeat_pub_, replanState_pub_, hover_log_pub_, preempt_pub_, mode_state_pub_;
 
   std::shared_ptr<mapping::OccGridMap> gridmapPtr_;
   std::shared_ptr<env::Env> envPtr_;
@@ -108,6 +112,23 @@ class Nodelet : public nodelet::Nodelet {
     }
   }
 
+  void publish_mode_state() {
+    std_msgs::Int32 msg;
+    msg.data = (planner_mode_.load() == MODE_TRACKER) ? MODE_TRACKER : MODE_IDLE;
+    mode_state_pub_.publish(msg);
+  }
+
+  void reset_tracker_runtime(bool send_preempt) {
+    triger_received_ = false;
+    land_triger_received_ = false;
+    wait_hover_ = true;
+    force_hover_ = true;
+    last_trigger_stamp_ = ros::Time(0);
+    if (send_preempt) {
+      publish_preempt_burst(2);
+    }
+  }
+
   void pub_hover_p(const Eigen::Vector3d& hover_p, const ros::Time& stamp) {
     quadrotor_msgs::PolyTraj traj_msg;
     traj_msg.hover = true;
@@ -147,9 +168,15 @@ class Nodelet : public nodelet::Nodelet {
   }
 
   void triger_callback(const geometry_msgs::PoseStampedConstPtr& msgPtr) {
+    if (planner_mode_.load() != MODE_TRACKER) {
+      ROS_WARN_THROTTLE(1.0, "\033[34m[TRACK]\033[0m Ignore tracker trigger while tracker mode is disabled.");
+      return;
+    }
+
     goal_ << msgPtr->pose.position.x, msgPtr->pose.position.y, 0.9;
-    planner_mode_ = 2;
     triger_received_ = true;
+    wait_hover_ = true;
+    force_hover_ = true;
     last_trigger_stamp_ = ros::Time::now();
     ROS_INFO("\033[34m[TRACK]\033[0m Trigger received: x=%.2f y=%.2f z=%.2f",
              msgPtr->pose.position.x, msgPtr->pose.position.y, msgPtr->pose.position.z);
@@ -158,22 +185,32 @@ class Nodelet : public nodelet::Nodelet {
   }
 
   void mode_trigger_callback(const std_msgs::Int32::ConstPtr& msgPtr) {
-    planner_mode_ = msgPtr->data;
-    if (planner_mode_.load() == 2) {
-      triger_received_ = true;
-      last_trigger_stamp_ = ros::Time::now();
-      TRACK_WARN("Mode trigger=2, tracker enabled.");
-      TRACK_STEP("S00 mode trigger accepted -> tracker enabled.");
+    const int mode = msgPtr->data;
+    if (mode != MODE_EGO && mode != MODE_TRACKER) {
+      TRACK_WARN("Unknown mode trigger=%d, ignore.", mode);
       return;
     }
-    triger_received_ = false;
-    land_triger_received_ = false;
-    wait_hover_ = true;
-    force_hover_ = true;
-    last_trigger_stamp_ = ros::Time(0);
-    publish_preempt_burst(2);
-    TRACK_WARN("Mode trigger=%d, tracker standby.", planner_mode_.load());
-    TRACK_STEP("S00 mode trigger switched to standby (mode=%d), tracker states reset.", planner_mode_.load());
+
+    const int prev_mode = planner_mode_.load();
+    if (mode == prev_mode) {
+      publish_mode_state();
+      TRACK_STEP("S00 mode trigger unchanged -> mode=%d.", mode);
+      return;
+    }
+
+    planner_mode_ = mode;
+    if (mode == MODE_TRACKER) {
+      // Enter tracker mode from standby/ego: clear stale runtime and wait explicit tracker trigger.
+      reset_tracker_runtime(true);
+      TRACK_WARN("Mode trigger=2, tracker enabled (waiting for tracker trigger).");
+      TRACK_STEP("S00 mode trigger accepted -> tracker enabled, runtime reset.");
+    } else {
+      // Leave tracker mode: immediately preempt tracker traj output and clear runtime flags.
+      reset_tracker_runtime(true);
+      TRACK_WARN("Mode trigger=%d, tracker standby.", mode);
+      TRACK_STEP("S00 mode trigger switched to standby (mode=%d), tracker states reset.", mode);
+    }
+    publish_mode_state();
   }
 
   void land_triger_callback(const geometry_msgs::PoseStampedConstPtr& msgPtr) {
@@ -197,6 +234,7 @@ class Nodelet : public nodelet::Nodelet {
 
     TRACK_WARN("Preempt received, interrupted current task.");
     TRACK_STEP("S00 preempt handled -> trigger cleared, hover state reset.");
+    publish_mode_state();
   }
 
   void odom_callback(const nav_msgs::Odometry::ConstPtr& msgPtr) {
@@ -224,7 +262,7 @@ class Nodelet : public nodelet::Nodelet {
   }
 
   bool trigger_active() {
-    if (planner_mode_.load() != 2) {
+    if (planner_mode_.load() != MODE_TRACKER) {
       return false;
     }
     if (!triger_received_) {
@@ -941,7 +979,9 @@ class Nodelet : public nodelet::Nodelet {
     replanState_pub_ = nh.advertise<quadrotor_msgs::ReplanState>("replanState", 1);
     hover_log_pub_ = nh.advertise<std_msgs::String>("hover_log", 10, true);
     preempt_pub_ = nh.advertise<std_msgs::Empty>("preempt", 10);
+    mode_state_pub_ = nh.advertise<std_msgs::Int32>("mode_state", 10, true);
     last_hover_log_pub_stamp_ = ros::Time(0);
+    publish_mode_state();
 
     if (debug_) {
       plan_timer_ = nh.createTimer(ros::Duration(1.0 / plan_hz), &Nodelet::debug_timer_callback, this);
