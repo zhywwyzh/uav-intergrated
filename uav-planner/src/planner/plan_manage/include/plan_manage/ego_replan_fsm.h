@@ -114,6 +114,10 @@ namespace ego_planner
     int waypoint_num_, wpt_id_;
     // double planning_horizen_;
     double emergency_time_;
+    double ego_state_trigger_pos_thresh_;
+    double ego_state_trigger_vel_thresh_;
+    double ego_state_trigger_yaw_rate_thresh_;
+    double ego_state_trigger_hold_time_;
     bool flag_realworld_experiment_;
     bool enable_fail_safe_;
     bool enable_ground_height_measurement_;
@@ -128,18 +132,25 @@ namespace ego_planner
     bool have_tracker_heartbeat_;
     int tracker_replan_state_;
     int tracker_mode_state_;
+    bool tracker_takeover_ready_;
     bool tracker_land_requested_;
     double tracker_heartbeat_timeout_;
+    double tracker_takeover_ready_timeout_;
+    ros::Time last_tracker_takeover_ready_;
+    int cmd_owner_mode_;
     string mode_trigger_topic_, tracker_heartbeat_topic_, tracker_replan_state_topic_, tracker_land_trigger_topic_, tracker_mode_state_topic_;
+    string tracker_takeover_ready_topic_, cmd_owner_topic_;
 
     bool have_trigger_, have_target_, have_odom_, cur_traj_to_cur_target_, have_recv_pre_agent_, touch_goal_, mandatory_stop_, command_stop_;
     bool has_been_modified_;
+    bool pending_goal_finish_trigger_;
+    ros::Time goal_finish_stable_start_time_;
     FSM_EXEC_STATE exec_state_;
 
     Eigen::Vector3d start_pt_, start_vel_, start_acc_, start_jerk_; // start state
     Eigen::Vector3d glb_start_pt_, final_goal_;                     // goal state
     // Eigen::Vector3d local_target_pt_, local_target_vel_; // local target state
-    Eigen::Vector3d odom_pos_, odom_vel_, odom_acc_; // odometry state
+    Eigen::Vector3d odom_pos_, odom_vel_, odom_acc_, odom_omega_; // odometry state
     Eigen::Quaterniond odom_q_;
     Eigen::Vector3d odom_euler_;
     std::vector<Eigen::Vector3d> wps_;
@@ -149,9 +160,9 @@ namespace ego_planner
     ros::NodeHandle node_;
     ros::Timer exec_timer_, safety_timer_;
     ros::Subscriber waypoint_sub_, odom_sub_, trigger_sub_, broadcast_ploytraj_sub_, mandatory_stop_sub_, command_sub_, mode_trigger_sub_;
-    ros::Subscriber tracker_heartbeat_sub_, tracker_replan_state_sub_, tracker_land_trigger_sub_, tracker_mode_state_sub_;
+    ros::Subscriber tracker_heartbeat_sub_, tracker_replan_state_sub_, tracker_land_trigger_sub_, tracker_mode_state_sub_, tracker_takeover_ready_sub_;
     ros::Publisher data_disp_pub_, broadcast_ploytraj_pub_, ground_height_pub_, state_pub_, ego_state_trigger_pub_;
-    ros::Publisher ego_plan_state_pub_;
+    ros::Publisher ego_plan_state_pub_, cmd_owner_pub_;
 
     /* state machine functions */
     void execFSMCallback(const ros::TimerEvent &e);
@@ -186,11 +197,13 @@ namespace ego_planner
     void trackerHeartbeatCallback(const std_msgs::Empty::ConstPtr &msg);
     void trackerReplanStateCallback(const quadrotor_msgs::ReplanState::ConstPtr &msg);
     void trackerModeStateCallback(const std_msgs::Int32::ConstPtr &msg);
+    void trackerTakeoverReadyCallback(const std_msgs::Bool::ConstPtr &msg);
     void trackerLandTriggerCallback(const geometry_msgs::PoseStampedConstPtr &msg);
     void RecvBroadcastMINCOTrajCallback(const traj_utils::MINCOTrajConstPtr &msg);
     void polyTraj2ROSMsg(traj_utils::PolyTraj *poly_msg, traj_utils::MINCOTraj *MINCO_msg);
     void resetEgoTaskSession(bool clear_target);
     void syncEgoStartPoseFromOdom();
+    void publishCmdOwner(int owner_mode, const char *reason);
 
     /* utils */
     void initEgoPlanResult();

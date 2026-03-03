@@ -9,7 +9,11 @@
   <arg name="preempt_topic" default="/tracker_preempt"/>
   <arg name="mode_trigger_topic" default="/uav_planner/trigger"/>
   <arg name="tracker_session_topic" default="/track/session"/>
+  <arg name="tracker_takeover_ready_topic" default="/track/takeover_ready"/>
+  <arg name="cmd_owner_topic" default="/uav_planner/cmd_owner"/>
   <arg name="position_cmd_topic" default="position_cmd"/>
+  <arg name="tracker_cmd_period_sec" default="0.01"/>
+  <arg name="tracker_yaw_rate_max" default="0.6"/>
 
   <!-- <node pkg="nodelet" type="nodelet" name="plan_manage" args="manager" output="screen">
     <param name="num_worker_threads" value="16"/>
@@ -27,12 +31,13 @@
     <remap from="~preempt" to="$(arg preempt_topic)"/>
     <remap from="~mode_trigger" to="$(arg mode_trigger_topic)"/>
     <remap from="~tracker_session" to="$(arg tracker_session_topic)"/>
+    <remap from="~takeover_ready" to="$(arg tracker_takeover_ready_topic)"/>
 
     <param name="plan_hz" value="20"/>
 
     <param name="K" value="8"/>
-    <param name="vmax" value="1.5"/>
-    <param name="amax" value="1.5"/>
+    <param name="vmax" value="2.5"/>
+    <param name="amax" value="4.5"/>
     <param name="rhoT" value="100.0"/>
     <param name="rhoP" value="10000.0"/>
     <param name="rhoV" value="1000.0"/>
@@ -48,7 +53,7 @@
     <param name="debug" value="false"/>
 
     <param name="prediction/rho_a" value="1.0"/>
-    <param name="prediction/vmax" value="1.5"/>
+    <param name="prediction/vmax" value="2.5"/>
 
   </node>
   <node pkg="planning" name="traj_server" type="traj_server" output="screen">
@@ -57,6 +62,11 @@
     <remap from="~heartbeat" to="heartbeat"/>
     <remap from="~preempt" to="$(arg preempt_topic)"/>
     <remap from="~tracker_session" to="$(arg tracker_session_topic)"/>
+    <param name="cmd_owner_topic" value="$(arg cmd_owner_topic)"/>
+    <param name="owner_mode" value="2"/>
+    <param name="strict_owner_gate" value="true"/>
+    <param name="cmd_period_sec" value="$(arg tracker_cmd_period_sec)" type="double"/>
+    <param name="yaw_rate_max" value="$(arg tracker_yaw_rate_max)" type="double"/>
     <param name="time_forward" value="1.0" type="double"/>
   </node>
 </launch>

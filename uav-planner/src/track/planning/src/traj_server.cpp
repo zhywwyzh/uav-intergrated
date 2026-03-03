@@ -6,6 +6,7 @@
 #include <std_msgs/Int32.h>
 #include <visualization_msgs/Marker.h>
 
+#include <atomic>
 #include <traj_opt/poly_traj_utils.hpp>
 
 #ifndef TRACK_WARN
@@ -23,6 +24,12 @@ bool has_last_cmd_ = false;
 int active_session_id_ = 0;
 bool have_session_ = false;
 ros::Time session_update_time_(0);
+int expected_owner_mode_ = 2;
+bool strict_owner_gate_ = false;
+std::atomic_int cmd_owner_mode_{0};
+std::atomic_bool have_cmd_owner_{false};
+double cmd_period_sec_ = 0.01;
+double yaw_rate_max_ = 1.0;  // rad/s, <=0 disables yaw-rate limiting
 
 void reset_runtime_state(bool clear_last_cmd) {
   receive_traj_ = false;
@@ -113,8 +120,9 @@ bool exe_traj(const quadrotor_msgs::PolyTraj &trajMsg) {
     d_yaw = d_yaw >= M_PI ? d_yaw - 2 * M_PI : d_yaw;
     d_yaw = d_yaw <= -M_PI ? d_yaw + 2 * M_PI : d_yaw;
     double d_yaw_abs = fabs(d_yaw);
-    if (d_yaw_abs >= 0.02) {
-      yaw = last_yaw_ + d_yaw / d_yaw_abs * 0.02;
+    const double yaw_step_max = yaw_rate_max_ > 0.0 ? yaw_rate_max_ * cmd_period_sec_ : 0.0;
+    if (yaw_step_max > 1e-6 && d_yaw_abs >= yaw_step_max) {
+      yaw = last_yaw_ + d_yaw / d_yaw_abs * yaw_step_max;
     }
     publish_cmd(trajMsg.traj_id, p, v, a, yaw, 0);  // TODO yaw
     last_yaw_ = yaw;
@@ -158,7 +166,26 @@ void preemptCallback(const std_msgs::EmptyConstPtr &msg) {
   TRACK_WARN("Preempt received, traj server output suspended.");
 }
 
+void cmdOwnerCallback(const std_msgs::Int32ConstPtr &msg) {
+  cmd_owner_mode_.store(msg->data, std::memory_order_relaxed);
+  have_cmd_owner_.store(true, std::memory_order_relaxed);
+}
+
+bool ownerGateOpen() {
+  if (!strict_owner_gate_) {
+    return true;
+  }
+  if (!have_cmd_owner_.load(std::memory_order_relaxed)) {
+    return true;
+  }
+  return cmd_owner_mode_.load(std::memory_order_relaxed) == expected_owner_mode_;
+}
+
 void cmdCallback(const ros::TimerEvent &e) {
+  (void)e;
+  if (!ownerGateOpen()) {
+    return;
+  }
   if (!receive_traj_) {
     return;
   }
@@ -181,15 +208,22 @@ void cmdCallback(const ros::TimerEvent &e) {
 int main(int argc, char **argv) {
   ros::init(argc, argv, "traj_server");
   ros::NodeHandle nh("~");
+  std::string cmd_owner_topic = "/uav_planner/cmd_owner";
+  nh.param("cmd_owner_topic", cmd_owner_topic, cmd_owner_topic);
+  nh.param("owner_mode", expected_owner_mode_, 2);
+  nh.param("strict_owner_gate", strict_owner_gate_, false);
+  nh.param("cmd_period_sec", cmd_period_sec_, 0.01);
+  nh.param("yaw_rate_max", yaw_rate_max_, 1.0);
 
   ros::Subscriber poly_traj_sub = nh.subscribe("trajectory", 10, polyTrajCallback);
   ros::Subscriber heartbeat_sub = nh.subscribe("heartbeat", 10, heartbeatCallback);
   ros::Subscriber preempt_sub = nh.subscribe("preempt", 10, preemptCallback);
   ros::Subscriber tracker_session_sub = nh.subscribe("tracker_session", 10, trackerSessionCallback);
+  ros::Subscriber cmd_owner_sub = nh.subscribe(cmd_owner_topic, 10, cmdOwnerCallback);
 
   pos_cmd_pub_ = nh.advertise<quadrotor_msgs::PositionCommand>("position_cmd", 50);
 
-  ros::Timer cmd_timer = nh.createTimer(ros::Duration(0.01), cmdCallback);
+  ros::Timer cmd_timer = nh.createTimer(ros::Duration(cmd_period_sec_), cmdCallback);
 
   ros::Duration(1.0).sleep();
 

@@ -58,6 +58,7 @@ def main():
     parser = argparse.ArgumentParser(description="Enable/disable ego planning and publish GoalSet")
     parser.add_argument("--mode-topic", default="/uav_planner/trigger")
     parser.add_argument("--mode-value", type=int, default=1)
+    parser.add_argument("--mode-repeat", type=int, default=1)
     parser.add_argument("--planning-service", default="/drone_0_ego_planner_node/planning/enable")
     parser.add_argument("--goal-topic", default="/goal_with_id_from_station")
     parser.add_argument("--goal-delay", type=float, default=0.3)
@@ -86,7 +87,7 @@ def main():
     planning_target = not args.disable_planning
     rospy.loginfo("%s Trigger requested, planning_target=%s", EGO_TAG, planning_target)
     mode_msg = Int32(data=int(args.mode_value))
-    for _ in range(3):
+    for _ in range(max(1, int(args.mode_repeat))):
         if rospy.is_shutdown():
             return
         mode_pub.publish(mode_msg)

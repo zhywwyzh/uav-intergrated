@@ -1,5 +1,6 @@
 
 #include <plan_manage/ego_replan_fsm.h>
+#include <cmath>
 
 #ifndef EGO_WARN
 #define EGO_WARN(fmt, ...) ROS_WARN("\033[32m[EGO]\033[0m " fmt, ##__VA_ARGS__)
@@ -19,13 +20,19 @@ namespace ego_planner
     cur_traj_to_cur_target_ = false;
     has_been_modified_      = false;
     command_stop_           = false;
+    pending_goal_finish_trigger_ = false;
+    goal_finish_stable_start_time_ = ros::Time(0);
     planner_mode_           = MODE_EGO;
     active_mode_            = MODE_IDLE;
     switch_latched_         = false;
     have_tracker_heartbeat_ = false;
     tracker_replan_state_   = -2;
     tracker_mode_state_     = MODE_IDLE;
+    tracker_takeover_ready_ = false;
     tracker_land_requested_ = false;
+    tracker_takeover_ready_timeout_ = -1.0;
+    last_tracker_takeover_ready_ = ros::Time(0);
+    cmd_owner_mode_ = MODE_IDLE;
     yaw_cmd_.des_yaw        = 0.0;
     yaw_cmd_.yaw_reach      = true;
     yaw_cmd_.cmd_time       = ros::Time(0);
@@ -35,6 +42,10 @@ namespace ego_planner
     nh.param("fsm/realworld_experiment", flag_realworld_experiment_, false);
     nh.param("fsm/fail_safe", enable_fail_safe_, true);
     nh.param("fsm/ground_height_measurement", enable_ground_height_measurement_, false);
+    nh.param("fsm/ego_state_trigger_pos_thresh", ego_state_trigger_pos_thresh_, 0.30);
+    nh.param("fsm/ego_state_trigger_vel_thresh", ego_state_trigger_vel_thresh_, 0.15);
+    nh.param("fsm/ego_state_trigger_yaw_rate_thresh", ego_state_trigger_yaw_rate_thresh_, 0.20);
+    nh.param("fsm/ego_state_trigger_hold_time", ego_state_trigger_hold_time_, 0.20);
     int default_mode = MODE_EGO;
     nh.param("fsm/default_mode", default_mode, static_cast<int>(MODE_EGO));
     planner_mode_ = std::max(static_cast<int>(MODE_IDLE), std::min(default_mode, static_cast<int>(MODE_TRACKER)));
@@ -44,6 +55,9 @@ namespace ego_planner
     nh.param<std::string>("fsm/tracker_replan_state_topic", tracker_replan_state_topic_, std::string("/track/replanState"));
     nh.param<std::string>("fsm/tracker_land_trigger_topic", tracker_land_trigger_topic_, std::string("/track_land_trigger"));
     nh.param<std::string>("fsm/tracker_mode_state_topic", tracker_mode_state_topic_, std::string("/track/mode_state"));
+    nh.param<std::string>("fsm/tracker_takeover_ready_topic", tracker_takeover_ready_topic_, std::string("/track/takeover_ready"));
+    nh.param<std::string>("fsm/cmd_owner_topic", cmd_owner_topic_, std::string("/uav_planner/cmd_owner"));
+    nh.param("fsm/tracker_takeover_ready_timeout", tracker_takeover_ready_timeout_, -1.0);
 
     nh.param("fsm/waypoint_num", waypoint_num_, -1);
     for (int i = 0; i < waypoint_num_; i++)
@@ -76,6 +90,7 @@ namespace ego_planner
     tracker_heartbeat_sub_ = nh.subscribe(tracker_heartbeat_topic_, 20, &EGOReplanFSM::trackerHeartbeatCallback, this);
     tracker_replan_state_sub_ = nh.subscribe(tracker_replan_state_topic_, 20, &EGOReplanFSM::trackerReplanStateCallback, this);
     tracker_mode_state_sub_ = nh.subscribe(tracker_mode_state_topic_, 20, &EGOReplanFSM::trackerModeStateCallback, this);
+    tracker_takeover_ready_sub_ = nh.subscribe(tracker_takeover_ready_topic_, 20, &EGOReplanFSM::trackerTakeoverReadyCallback, this);
     tracker_land_trigger_sub_ = nh.subscribe(tracker_land_trigger_topic_, 10, &EGOReplanFSM::trackerLandTriggerCallback, this);
 
     /* Use MINCO trajectory to minimize the message size in wireless communication */
@@ -90,6 +105,8 @@ namespace ego_planner
     state_pub_          = nh.advertise<std_msgs::Int8>("state", 10);
     ego_plan_state_pub_ = nh.advertise<quadrotor_msgs::EgoPlannerResult>("/planning/ego_plan_result", 10);
     ego_state_trigger_pub_ = nh.advertise<quadrotor_msgs::EgoStateTrigger>("/planning/ego_state_trigger", 10);
+    cmd_owner_pub_ = nh.advertise<std_msgs::Int32>(cmd_owner_topic_, 10, true);
+    publishCmdOwner(MODE_IDLE, "INIT");
 
     // ROS_INFO("Wait for 3 seconds.");
     // ros::Time t0 = ros::Time::now();
@@ -180,6 +197,8 @@ namespace ego_planner
         switch_latched_ = true;
         resetEgoTaskSession(false);
         tracker_land_requested_ = false;
+        tracker_takeover_ready_ = false;
+        publishCmdOwner(MODE_IDLE, "MODE_SWITCH_PREPARE");
         if (have_odom_)
         {
           callEmergencyStop(odom_pos_);
@@ -203,11 +222,13 @@ namespace ego_planner
       if (active_mode_ == MODE_TRACKER)
       {
         traj_server_.setOutputEnabled(false);
+        publishCmdOwner(MODE_TRACKER, "MODE_SWITCH->TRACKER");
         changeFSMExecState(TRACK_WAIT_TARGET, "MODE_SWITCH");
       }
       else
       {
         traj_server_.setOutputEnabled(true);
+        publishCmdOwner(MODE_EGO, "MODE_SWITCH->EGO");
         resetEgoTaskSession(true);
         syncEgoStartPoseFromOdom();
         changeFSMExecState(EGO_WAIT_TARGET, "MODE_SWITCH");
@@ -217,6 +238,40 @@ namespace ego_planner
 
     case EGO_WAIT_TARGET:
     {
+      if (pending_goal_finish_trigger_)
+      {
+        bool stable_now = false;
+        if (have_odom_)
+        {
+          const double goal_dist = (final_goal_ - odom_pos_).norm();
+          const double vel_norm = odom_vel_.norm();
+          const double yaw_rate_abs = std::abs(odom_omega_(2));
+          stable_now = goal_dist <= ego_state_trigger_pos_thresh_ &&
+                       vel_norm <= ego_state_trigger_vel_thresh_ &&
+                       yaw_rate_abs <= ego_state_trigger_yaw_rate_thresh_;
+        }
+
+        if (stable_now)
+        {
+          if (goal_finish_stable_start_time_.isZero())
+            goal_finish_stable_start_time_ = ros::Time::now();
+
+          if ((ros::Time::now() - goal_finish_stable_start_time_).toSec() >= ego_state_trigger_hold_time_)
+          {
+            quadrotor_msgs::EgoStateTrigger trigger_msg;
+            trigger_msg.header.stamp = ros::Time::now();
+            trigger_msg.data = true;
+            ego_state_trigger_pub_.publish(trigger_msg);
+            pending_goal_finish_trigger_ = false;
+            goal_finish_stable_start_time_ = ros::Time(0);
+          }
+        }
+        else
+        {
+          goal_finish_stable_start_time_ = ros::Time(0);
+        }
+      }
+
       if (!have_target_ || !have_trigger_ || !yaw_cmd_.yaw_reach)
         goto force_return; // return;
       else
@@ -347,6 +402,8 @@ namespace ego_planner
         {
           have_target_ = false;
           have_trigger_ = false;
+          pending_goal_finish_trigger_ = true;
+          goal_finish_stable_start_time_ = ros::Time(0);
 
           if (target_type_ == TARGET_TYPE::PRESET_TARGET)
           {
@@ -361,13 +418,10 @@ namespace ego_planner
         else
         {
           ROS_ERROR("t_cur > info->duration but touch_goal_ is false! ERROR");
+          pending_goal_finish_trigger_ = false;
+          goal_finish_stable_start_time_ = ros::Time(0);
           changeFSMExecState(EGO_WAIT_TARGET, "EGOFSM"); // no better choises
         }
-        quadrotor_msgs::EgoStateTrigger trigger_msg;
-        // 赋予ros时间戳
-        trigger_msg.header.stamp = ros::Time::now();
-        trigger_msg.data = true;
-        ego_state_trigger_pub_.publish(trigger_msg); // 发布达到目的地信号
       }
       else if ((uk_see_alot || (!touch_goal_ && close_to_current_traj_end)) &&
                !close_to_final_goal) // case 3: time to perform next replan
@@ -453,6 +507,8 @@ namespace ego_planner
           ROS_ERROR("Totally get stuck in obs! I can do nothing!");
           have_trigger_ = false;
           have_target_ = false;
+          pending_goal_finish_trigger_ = false;
+          goal_finish_stable_start_time_ = ros::Time(0);
           changeFSMExecState(EGO_WAIT_TARGET, "EGOFSM");
         }
       }
@@ -476,6 +532,20 @@ namespace ego_planner
       if ((ros::Time::now() - last_tracker_heartbeat_).toSec() > tracker_heartbeat_timeout_)
       {
         ROS_WARN_THROTTLE(1.0, "\033[32m[EGO]\033[0m Waiting tracker heartbeat...");
+        goto force_return;
+      }
+
+      if (!tracker_takeover_ready_)
+      {
+        ROS_WARN_THROTTLE(1.0, "\033[32m[EGO]\033[0m Waiting tracker takeover_ready...");
+        goto force_return;
+      }
+
+      if (tracker_takeover_ready_timeout_ > 0.0 &&
+          (ros::Time::now() - last_tracker_takeover_ready_).toSec() > tracker_takeover_ready_timeout_)
+      {
+        ROS_WARN_THROTTLE(1.0, "\033[32m[EGO]\033[0m tracker takeover_ready timeout, waiting fresh ready.");
+        tracker_takeover_ready_ = false;
         goto force_return;
       }
 
@@ -790,6 +860,8 @@ namespace ego_planner
 
         have_target_ = false;
         have_trigger_ = false;
+        pending_goal_finish_trigger_ = false;
+        goal_finish_stable_start_time_ = ros::Time(0);
 
         if (target_type_ == TARGET_TYPE::PRESET_TARGET)
         {
@@ -1134,6 +1206,8 @@ namespace ego_planner
     final_goal_ = next_wp;
     glb_start_pt_ = odom_pos_;
     have_target_ = true;
+    pending_goal_finish_trigger_ = false;
+    goal_finish_stable_start_time_ = ros::Time(0);
     cur_traj_to_cur_target_ = false;
 
     if (exec_state_ == EGO_WAIT_TARGET)
@@ -1428,6 +1502,9 @@ namespace ego_planner
     odom_vel_(0) = msg->twist.twist.linear.x;
     odom_vel_(1) = msg->twist.twist.linear.y;
     odom_vel_(2) = msg->twist.twist.linear.z;
+    odom_omega_(0) = msg->twist.twist.angular.x;
+    odom_omega_(1) = msg->twist.twist.angular.y;
+    odom_omega_(2) = msg->twist.twist.angular.z;
 
     odom_q_ = Eigen::Quaterniond(msg->pose.pose.orientation.w, msg->pose.pose.orientation.x,
                                  msg->pose.pose.orientation.y, msg->pose.pose.orientation.z);
@@ -1501,12 +1578,14 @@ namespace ego_planner
     {
       command_stop_ = false;
       tracker_land_requested_ = false;
+      tracker_takeover_ready_ = false;
       ROS_INFO("\033[32m[EGO]\033[0m Mode trigger=%d -> EGO planner requested.", trigger_mode);
     }
     else
     {
       resetEgoTaskSession(true);
       tracker_land_requested_ = false;
+      tracker_takeover_ready_ = false;
       ROS_INFO("\033[32m[EGO]\033[0m Mode trigger=%d -> TRACKER planner requested.", trigger_mode);
     }
 
@@ -1539,6 +1618,12 @@ namespace ego_planner
     tracker_mode_state_ = msg->data;
   }
 
+  void EGOReplanFSM::trackerTakeoverReadyCallback(const std_msgs::Bool::ConstPtr &msg)
+  {
+    tracker_takeover_ready_ = msg->data;
+    last_tracker_takeover_ready_ = ros::Time::now();
+  }
+
   void EGOReplanFSM::trackerLandTriggerCallback(const geometry_msgs::PoseStampedConstPtr &msg)
   {
     (void)msg;
@@ -1548,6 +1633,8 @@ namespace ego_planner
   void EGOReplanFSM::resetEgoTaskSession(bool clear_target)
   {
     have_trigger_ = false;
+    pending_goal_finish_trigger_ = false;
+    goal_finish_stable_start_time_ = ros::Time(0);
     cur_traj_to_cur_target_ = false;
     if (clear_target)
     {
@@ -1574,6 +1661,15 @@ namespace ego_planner
     yaw_cmd_.yaw_reach = true;
     yaw_cmd_.cmd_time = ros::Time::now();
     traj_server_.setYaw(yaw_now, yaw_now, odom_pos_, false);
+  }
+
+  void EGOReplanFSM::publishCmdOwner(int owner_mode, const char *reason)
+  {
+    (void)reason;
+    cmd_owner_mode_ = owner_mode;
+    std_msgs::Int32 msg;
+    msg.data = owner_mode;
+    cmd_owner_pub_.publish(msg);
   }
 
   void EGOReplanFSM::RecvBroadcastMINCOTrajCallback(const traj_utils::MINCOTrajConstPtr &msg)
@@ -1979,6 +2075,8 @@ namespace ego_planner
     // 2) 取消当前目标 / 触发，防止后续再次规划
     have_target_ = false;
     have_trigger_ = false;
+    pending_goal_finish_trigger_ = false;
+    goal_finish_stable_start_time_ = ros::Time(0);
 
     // 3) 立刻调用 emergency stop 逻辑（如果已有 odom），这个函数会:
     //    - 调用 planner_manager_->EmergencyStop(stop_pos)

@@ -7,12 +7,14 @@
 #include <quadrotor_msgs/ReplanState.h>
 #include <ros/package.h>
 #include <ros/ros.h>
+#include <std_msgs/Bool.h>
 #include <std_msgs/Empty.h>
 #include <std_msgs/Int32.h>
 #include <std_msgs/String.h>
 #include <traj_opt/traj_opt.h>
 
 #include <cmath>
+#include <algorithm>
 #include <Eigen/Core>
 #include <atomic>
 #include <env/env.hpp>
@@ -46,7 +48,7 @@ class Nodelet : public nodelet::Nodelet {
   ros::Subscriber gridmap_sub_, odom_sub_, target_sub_, triger_sub_, land_triger_sub_, preempt_sub_, mode_trigger_sub_;
   ros::Timer plan_timer_;
 
-  ros::Publisher traj_pub_, heartbeat_pub_, replanState_pub_, hover_log_pub_, preempt_pub_, mode_state_pub_, tracker_session_pub_;
+  ros::Publisher traj_pub_, heartbeat_pub_, replanState_pub_, hover_log_pub_, preempt_pub_, mode_state_pub_, tracker_session_pub_, takeover_ready_pub_;
 
   std::shared_ptr<mapping::OccGridMap> gridmapPtr_;
   std::shared_ptr<env::Env> envPtr_;
@@ -75,6 +77,9 @@ class Nodelet : public nodelet::Nodelet {
   bool force_hover_ = true;
   bool have_active_traj_ = false;
   bool force_plan_from_odom_ = true;
+  bool tracker_takeover_ready_ = false;
+  int prediction_success_streak_ = 0;
+  int valid_plan_streak_ = 0;
   int tracker_session_id_ = 0;
   std::atomic<double> session_epoch_sec_{0.0};
   std::atomic<double> last_odom_recv_sec_{0.0};
@@ -86,6 +91,14 @@ class Nodelet : public nodelet::Nodelet {
   double force_hover_speed_threshold_ = 0.1;
   double force_hover_timeout_sec_ = 2.0;
   double snapshot_max_age_sec_ = 0.3;
+  int prediction_ready_streak_required_ = 2;
+  int valid_plan_streak_required_ = 2;
+  double target_speed_gate_ = 4.0;
+  double target_acc_gate_ = 8.0;
+  bool have_target_quality_state_ = false;
+  Eigen::Vector3d target_quality_prev_pos_;
+  Eigen::Vector3d target_quality_prev_vel_;
+  ros::Time target_quality_prev_stamp_;
   std::atomic_int planner_mode_ = ATOMIC_VAR_INIT(0);
 
   nav_msgs::Odometry odom_msg_, target_msg_;
@@ -145,6 +158,24 @@ class Nodelet : public nodelet::Nodelet {
     tracker_session_pub_.publish(msg);
   }
 
+  void publish_takeover_ready_state() {
+    if (!takeover_ready_pub_) {
+      return;
+    }
+    std_msgs::Bool msg;
+    msg.data = tracker_takeover_ready_;
+    takeover_ready_pub_.publish(msg);
+  }
+
+  void reset_takeover_readiness(const char* reason) {
+    (void)reason;
+    tracker_takeover_ready_ = false;
+    prediction_success_streak_ = 0;
+    valid_plan_streak_ = 0;
+    have_target_quality_state_ = false;
+    publish_takeover_ready_state();
+  }
+
   void begin_new_tracker_session(const char* reason, bool require_fresh_inputs) {
     (void)reason;
     ++tracker_session_id_;
@@ -167,6 +198,7 @@ class Nodelet : public nodelet::Nodelet {
     if (begin_new_session) {
       begin_new_tracker_session(reason, require_fresh_inputs);
     }
+    reset_takeover_readiness(reason);
     triger_received_ = false;
     land_triger_received_ = false;
     wait_hover_ = true;
@@ -421,6 +453,69 @@ class Nodelet : public nodelet::Nodelet {
     return true;
   }
 
+  bool target_quality_ok(const PlannerSnapshot& snapshot, const ros::Time& now, double& speed, double& acc) {
+    speed = snapshot.target_v.norm();
+    acc = 0.0;
+
+    if (target_speed_gate_ > 0.0 && speed > target_speed_gate_) {
+      target_quality_prev_pos_ = snapshot.target_p;
+      target_quality_prev_vel_ = snapshot.target_v;
+      target_quality_prev_stamp_ = now;
+      have_target_quality_state_ = true;
+      return false;
+    }
+
+    if (have_target_quality_state_) {
+      const double dt = (now - target_quality_prev_stamp_).toSec();
+      if (dt > 1e-3) {
+        acc = (snapshot.target_v - target_quality_prev_vel_).norm() / dt;
+        if (target_acc_gate_ > 0.0 && acc > target_acc_gate_) {
+          target_quality_prev_pos_ = snapshot.target_p;
+          target_quality_prev_vel_ = snapshot.target_v;
+          target_quality_prev_stamp_ = now;
+          return false;
+        }
+      }
+    }
+
+    target_quality_prev_pos_ = snapshot.target_p;
+    target_quality_prev_vel_ = snapshot.target_v;
+    target_quality_prev_stamp_ = now;
+    have_target_quality_state_ = true;
+    return true;
+  }
+
+  void update_takeover_readiness(bool prediction_ok, bool valid_plan_ok) {
+    if (prediction_ok) {
+      ++prediction_success_streak_;
+    } else {
+      prediction_success_streak_ = 0;
+      valid_plan_streak_ = 0;
+      if (tracker_takeover_ready_) {
+        tracker_takeover_ready_ = false;
+        publish_takeover_ready_state();
+      }
+      return;
+    }
+
+    if (valid_plan_ok) {
+      ++valid_plan_streak_;
+    } else {
+      valid_plan_streak_ = 0;
+    }
+
+    const bool ready = prediction_success_streak_ >= std::max(1, prediction_ready_streak_required_) &&
+                       valid_plan_streak_ >= std::max(1, valid_plan_streak_required_);
+    if (ready != tracker_takeover_ready_) {
+      tracker_takeover_ready_ = ready;
+      publish_takeover_ready_state();
+      TRACK_WARN("Tracker takeover readiness changed: ready=%d (pred_streak=%d/%d, valid_streak=%d/%d).",
+                 (int)tracker_takeover_ready_,
+                 prediction_success_streak_, prediction_ready_streak_required_,
+                 valid_plan_streak_, valid_plan_streak_required_);
+    }
+  }
+
   bool trigger_active() {
     if (planner_mode_.load() != MODE_TRACKER) {
       return false;
@@ -498,6 +593,17 @@ class Nodelet : public nodelet::Nodelet {
     Eigen::Vector3d target_p = snapshot.target_p;
     const Eigen::Vector3d& target_v = snapshot.target_v;
     const Eigen::Quaterniond& target_q = snapshot.target_q;
+
+    double target_speed = 0.0;
+    double target_acc = 0.0;
+    const ros::Time now = ros::Time::now();
+    if (!target_quality_ok(snapshot, now, target_speed, target_acc)) {
+      TRACK_STEP_THROTTLE(1.0, "S02 target quality gate blocked: |target_v|=%.2f, |target_a_est|=%.2f",
+                          target_speed, target_acc);
+      update_takeover_readiness(false, false);
+      return;
+    }
+
     TRACK_STEP_THROTTLE(1.0, "S02 input ready: |odom_v|=%.2f, |target_v|=%.2f, dist=%.2f",
                         odom_v.norm(), target_v.norm(), (target_p - odom_p).norm());
 
@@ -713,6 +819,18 @@ class Nodelet : public nodelet::Nodelet {
       replanState_pub_.publish(replanStateMsg_);
       TRACK_STEP_THROTTLE(1.0, "S08 skipped collision check because traj generation failed.");
     }
+
+    update_takeover_readiness(generate_new_traj_success, valid);
+
+    if (valid && !tracker_takeover_ready_) {
+      replanStateMsg_.state = -2;
+      replanState_pub_.publish(replanStateMsg_);
+      TRACK_STEP_THROTTLE(1.0, "S09 hold publish until takeover ready (pred_streak=%d/%d, valid_streak=%d/%d).",
+                          prediction_success_streak_, prediction_ready_streak_required_,
+                          valid_plan_streak_, valid_plan_streak_required_);
+      return;
+    }
+
     if (valid) {
       force_hover_ = false;
       // TRACK_WARN("[planner] REPLAN SUCCESS");
@@ -908,6 +1026,13 @@ class Nodelet : public nodelet::Nodelet {
       replanStateMsg_.state = -2;
       replanState_pub_.publish(replanStateMsg_);
     }
+    update_takeover_readiness(generate_new_traj_success, valid);
+    if (valid && !tracker_takeover_ready_) {
+      replanStateMsg_.state = -2;
+      replanState_pub_.publish(replanStateMsg_);
+      TRACK_STEP_THROTTLE(1.0, "S09(fake) hold publish until takeover ready.");
+      return;
+    }
     if (valid) {
       force_hover_ = false;
       // TRACK_WARN("[planner] REPLAN SUCCESS");
@@ -1088,6 +1213,10 @@ class Nodelet : public nodelet::Nodelet {
     nh.param("force_hover_speed_threshold", force_hover_speed_threshold_, 0.1);
     nh.param("force_hover_timeout_sec", force_hover_timeout_sec_, 2.0);
     nh.param("snapshot_max_age_sec", snapshot_max_age_sec_, 0.3);
+    nh.param("prediction_ready_streak_required", prediction_ready_streak_required_, 2);
+    nh.param("valid_plan_streak_required", valid_plan_streak_required_, 2);
+    nh.param("target_speed_gate", target_speed_gate_, 4.0);
+    nh.param("target_acc_gate", target_acc_gate_, 8.0);
     int initial_mode = 0;
     nh.param("initial_mode", initial_mode, 0);
     planner_mode_ = initial_mode;
@@ -1106,9 +1235,11 @@ class Nodelet : public nodelet::Nodelet {
     preempt_pub_ = nh.advertise<std_msgs::Empty>("preempt", 10);
     mode_state_pub_ = nh.advertise<std_msgs::Int32>("mode_state", 10, true);
     tracker_session_pub_ = nh.advertise<std_msgs::Int32>("tracker_session", 10, true);
+    takeover_ready_pub_ = nh.advertise<std_msgs::Bool>("takeover_ready", 10, true);
     last_hover_log_pub_stamp_ = ros::Time(0);
     publish_mode_state();
     publish_tracker_session_state();
+    publish_takeover_ready_state();
 
     if (debug_) {
       plan_timer_ = nh.createTimer(ros::Duration(1.0 / plan_hz), &Nodelet::debug_timer_callback, this);

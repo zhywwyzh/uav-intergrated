@@ -117,10 +117,11 @@ def main():
     parser = argparse.ArgumentParser(description="Trigger track with dynamic target odom")
     parser.add_argument("--mode-topic", default="/uav_planner/trigger")
     parser.add_argument("--mode-value", type=int, default=2)
+    parser.add_argument("--mode-repeat", type=int, default=1)
     parser.add_argument(
         "--mode-refresh-rate",
         type=float,
-        default=2.0,
+        default=0.0,
         help="republish mode trigger during dynamic publishing; <=0 disables refresh",
     )
     parser.add_argument("--trigger-topic", default="/tracker_trigger")
@@ -254,7 +255,7 @@ def main():
     trigger_period = 1.0 / max(1.0, float(args.trigger_rate))
     trigger_msg = build_trigger_msg()
     mode_msg = Int32(data=int(args.mode_value))
-    for _ in range(3):
+    for _ in range(max(1, int(args.mode_repeat))):
         if rospy.is_shutdown():
             return
         mode_pub.publish(mode_msg)

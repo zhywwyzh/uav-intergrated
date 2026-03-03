@@ -8,6 +8,7 @@
 #include <quadrotor_msgs/PositionCommand.h>
 #include <ros/ros.h>
 #include <perception_utils/perception_utils.h>
+#include <std_msgs/Int32.h>
 
 namespace ego_planner
 {
@@ -16,6 +17,7 @@ namespace ego_planner
     private:
         ros::NodeHandle node_;
         ros::Publisher pos_cmd_pub_, cmd_vis_pub_;
+        ros::Subscriber cmd_owner_sub_;
 
         shared_ptr<PerceptionUtils> percep_utils_;
 
@@ -32,6 +34,11 @@ namespace ego_planner
         double last_yaw_, last_yawdot_, slowly_flip_yaw_target_, slowly_turn_to_center_target_;
         double time_forward_;
         double heartbeat_timeout_;
+        std::string cmd_owner_topic_;
+        int expected_owner_mode_{1};
+        bool strict_owner_gate_{false};
+        std::atomic_int cmd_owner_mode_{0};
+        std::atomic_bool have_cmd_owner_{false};
 
         struct LAST_POS
         {
@@ -69,6 +76,8 @@ namespace ego_planner
 
     private:
         // void heartbeatCallback(std_msgs::EmptyPtr msg);
+        void cmdOwnerCallback(const std_msgs::Int32::ConstPtr &msg);
+        bool ownerGateOpen() const;
         std::pair<double, double> calculate_yaw(double t_cur, Eigen::Vector3d &pos, double dt);
         void publish_cmd(Eigen::Vector3d p, Eigen::Vector3d v, Eigen::Vector3d a, Eigen::Vector3d j, double y, double yd);
         static void cmdThread(void *obj);

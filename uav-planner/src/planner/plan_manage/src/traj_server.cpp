@@ -16,10 +16,14 @@ namespace ego_planner
     
     node_.param("traj_server/time_forward", time_forward_, -1.0);
     node_.param("traj_server/heartbeat_timeout", heartbeat_timeout_, 3.0);
+    node_.param<std::string>("traj_server/cmd_owner_topic", cmd_owner_topic_, std::string("/uav_planner/cmd_owner"));
+    node_.param("traj_server/owner_mode", expected_owner_mode_, 1);
+    node_.param("traj_server/strict_owner_gate", strict_owner_gate_, true);
     last_yaw_ = 0.0;
     last_yawdot_ = 0.0;
 
     percep_utils_.reset(new PerceptionUtils(node_));
+    cmd_owner_sub_ = node_.subscribe(cmd_owner_topic_, 10, &TrajServer::cmdOwnerCallback, this);
 
     std::thread cmd_thread(TrajServer::cmdThread, this);
     cmd_thread.detach();
@@ -53,6 +57,21 @@ namespace ego_planner
     time_rec_.has_init = false;
     last_yawdot_ = 0.0;
     do_once_ = true;
+  }
+
+  void TrajServer::cmdOwnerCallback(const std_msgs::Int32::ConstPtr &msg)
+  {
+    cmd_owner_mode_.store(msg->data);
+    have_cmd_owner_.store(true);
+  }
+
+  bool TrajServer::ownerGateOpen() const
+  {
+    if (!strict_owner_gate_)
+      return true;
+    if (!have_cmd_owner_.load())
+      return true;
+    return cmd_owner_mode_.load() == expected_owner_mode_;
   }
 
   void TrajServer::resetYawLookforward(Eigen::Vector3d pos)
@@ -219,6 +238,11 @@ namespace ego_planner
 
   void TrajServer::cmdFun()
   {
+    if (!ownerGateOpen())
+    {
+      return;
+    }
+
     if (!output_enabled_.load())
     {
       return;
