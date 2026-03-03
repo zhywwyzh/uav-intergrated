@@ -33,6 +33,21 @@ namespace ego_planner
     do_once_ = true;
   }
 
+  void TrajServer::setOutputEnabled(bool enabled)
+  {
+    if (output_enabled_.load() == enabled)
+      return;
+
+    output_enabled_.store(enabled);
+    if (!output_enabled_.load())
+    {
+      // Stop publishing immediately when this planner is inactive.
+      receive_traj_ = false;
+      time_rec_.has_init = false;
+      do_once_ = true;
+    }
+  }
+
   void TrajServer::resetYawLookforward(Eigen::Vector3d pos)
   {
     yaw_given_.pos = pos;
@@ -194,6 +209,10 @@ namespace ego_planner
 
   void TrajServer::cmdFun()
   {
+    if (!output_enabled_.load())
+    {
+      return;
+    }
 
     /* no publishing before receive traj_ and have heartbeat */
     if (heartbeat_time_.toSec() <= 1e-5)

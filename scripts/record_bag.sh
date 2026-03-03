@@ -1,2 +1,2 @@
-# 记录话题/drone_0_planning/pos_cmd, /unity_odom, /target/odom, /track_ekf/ekf_odom, /drone_0_visual_slam/odom , /goal_with_id_from_station
-rosbag record /drone_0_planning/pos_cmd /unity_odom /target/odom /track_ekf/ekf_odom /drone_0_visual_slam/odom /goal_with_id_from_station -O bags/record_$(date +%Y%m%d_%H%M%S).bag
+# 记录话题/drone_0_planning/pos_cmd, /unity_odom, /target/odom, /track_ekf/ekf_odom, /drone_0_visual_slam/odom , /goal_with_id_from_station, /uav_planner/trigger
+rosbag record /drone_0_planning/pos_cmd /unity_odom /target/odom /track_ekf/ekf_odom /drone_0_visual_slam/odom /goal_with_id_from_station /uav_planner/trigger -O bags/record_$(date +%Y%m%d_%H%M%S).bag

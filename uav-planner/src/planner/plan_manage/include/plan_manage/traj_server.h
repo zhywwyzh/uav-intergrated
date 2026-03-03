@@ -3,6 +3,7 @@
 
 #include <iostream>
 #include <thread>
+#include <atomic>
 #include <optimizer/poly_traj_utils.hpp>
 #include <quadrotor_msgs/PositionCommand.h>
 #include <ros/ros.h>
@@ -19,6 +20,7 @@ namespace ego_planner
         shared_ptr<PerceptionUtils> percep_utils_;
 
         bool receive_traj_{false};
+        std::atomic_bool output_enabled_{true};
         poly_traj::Trajectory traj_;
         double traj_duration_;
         double start_time_;
@@ -63,6 +65,7 @@ namespace ego_planner
         void setYaw(double des_yaw, double cur_yaw, Eigen::Vector3d pos, bool look_forward = true);
         void resetYawLookforward(Eigen::Vector3d pos);
         void feedDog();
+        void setOutputEnabled(bool enabled);
 
     private:
         // void heartbeatCallback(std_msgs::EmptyPtr msg);

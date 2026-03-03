@@ -56,6 +56,7 @@ namespace ego_planner
     planner_manager_.reset(new EGOPlannerManager);
     planner_manager_->initPlanModules(nh, visualization_);
     traj_server_.initTrajServer(nh);
+    traj_server_.setOutputEnabled(true);
 
     have_trigger_ = !flag_realworld_experiment_;
     // no_replan_thresh_ = 0.5 * emergency_time_ * planner_manager_->pp_.max_vel_;
@@ -191,13 +192,15 @@ namespace ego_planner
       switch_latched_ = false;
       if (active_mode_ == MODE_TRACKER)
       {
+        traj_server_.setOutputEnabled(false);
         changeFSMExecState(TRACK_WAIT_TARGET, "MODE_SWITCH");
       }
       else
       {
+        traj_server_.setOutputEnabled(true);
         syncEgoStartPoseFromOdom();
-        if (have_target_)
-          have_trigger_ = true;
+        // Avoid auto-resuming stale goal after mode switches.
+        have_trigger_ = false;
         changeFSMExecState(EGO_WAIT_TARGET, "MODE_SWITCH");
       }
       break;

@@ -42,7 +42,7 @@ class Nodelet : public nodelet::Nodelet {
   ros::Subscriber gridmap_sub_, odom_sub_, target_sub_, triger_sub_, land_triger_sub_, preempt_sub_, mode_trigger_sub_;
   ros::Timer plan_timer_;
 
-  ros::Publisher traj_pub_, heartbeat_pub_, replanState_pub_, hover_log_pub_;
+  ros::Publisher traj_pub_, heartbeat_pub_, replanState_pub_, hover_log_pub_, preempt_pub_;
 
   std::shared_ptr<mapping::OccGridMap> gridmapPtr_;
   std::shared_ptr<env::Env> envPtr_;
@@ -96,6 +96,16 @@ class Nodelet : public nodelet::Nodelet {
     msg.data = "Hovering...";
     hover_log_pub_.publish(msg);
     last_hover_log_pub_stamp_ = now;
+  }
+
+  void publish_preempt_burst(int count = 1) {
+    if (count < 1) {
+      count = 1;
+    }
+    std_msgs::Empty msg;
+    for (int i = 0; i < count; ++i) {
+      preempt_pub_.publish(msg);
+    }
   }
 
   void pub_hover_p(const Eigen::Vector3d& hover_p, const ros::Time& stamp) {
@@ -161,6 +171,7 @@ class Nodelet : public nodelet::Nodelet {
     wait_hover_ = true;
     force_hover_ = true;
     last_trigger_stamp_ = ros::Time(0);
+    publish_preempt_burst(2);
     TRACK_WARN("Mode trigger=%d, tracker standby.", planner_mode_.load());
     TRACK_STEP("S00 mode trigger switched to standby (mode=%d), tracker states reset.", planner_mode_.load());
   }
@@ -229,6 +240,7 @@ class Nodelet : public nodelet::Nodelet {
     land_triger_received_ = false;
     wait_hover_ = true;
     force_hover_ = true;
+    publish_preempt_burst(1);
     TRACK_STEP_THROTTLE(1.0, "S00 trigger expired (hold=%.2fs), tracker paused.", trigger_hold_sec_);
     return false;
   }
@@ -928,6 +940,7 @@ class Nodelet : public nodelet::Nodelet {
     traj_pub_ = nh.advertise<quadrotor_msgs::PolyTraj>("trajectory", 1);
     replanState_pub_ = nh.advertise<quadrotor_msgs::ReplanState>("replanState", 1);
     hover_log_pub_ = nh.advertise<std_msgs::String>("hover_log", 10, true);
+    preempt_pub_ = nh.advertise<std_msgs::Empty>("preempt", 10);
     last_hover_log_pub_stamp_ = ros::Time(0);
 
     if (debug_) {
