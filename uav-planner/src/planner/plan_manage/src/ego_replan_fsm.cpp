@@ -20,7 +20,14 @@ namespace ego_planner
     has_been_modified_      = false;
     command_stop_           = false;
     planner_mode_           = MODE_EGO;
-    tracker_mode_latched_   = false;
+    active_mode_            = MODE_IDLE;
+    switch_latched_         = false;
+    have_tracker_heartbeat_ = false;
+    tracker_replan_state_   = -2;
+    tracker_land_requested_ = false;
+    yaw_cmd_.des_yaw        = 0.0;
+    yaw_cmd_.yaw_reach      = true;
+    yaw_cmd_.cmd_time       = ros::Time(0);
     /*  fsm param  */
     nh.param("fsm/flight_type", target_type_, -1);//target_type_==2
     nh.param("fsm/emergency_time", emergency_time_, 1.0);
@@ -30,9 +37,11 @@ namespace ego_planner
     int default_mode = MODE_EGO;
     nh.param("fsm/default_mode", default_mode, static_cast<int>(MODE_EGO));
     planner_mode_ = std::max(static_cast<int>(MODE_IDLE), std::min(default_mode, static_cast<int>(MODE_TRACKER)));
+    nh.param("fsm/tracker_heartbeat_timeout", tracker_heartbeat_timeout_, 1.0);
     nh.param<std::string>("fsm/mode_trigger_topic", mode_trigger_topic_, std::string("/uav_planner/trigger"));
-    nh.param<std::string>("fsm/tracker_trigger_topic", tracker_trigger_topic_, std::string("/tracker_trigger"));
-    nh.param<std::string>("fsm/tracker_preempt_topic", tracker_preempt_topic_, std::string("/tracker_preempt"));
+    nh.param<std::string>("fsm/tracker_heartbeat_topic", tracker_heartbeat_topic_, std::string("/track/heartbeat"));
+    nh.param<std::string>("fsm/tracker_replan_state_topic", tracker_replan_state_topic_, std::string("/track/replanState"));
+    nh.param<std::string>("fsm/tracker_land_trigger_topic", tracker_land_trigger_topic_, std::string("/track_land_trigger"));
 
     nh.param("fsm/waypoint_num", waypoint_num_, -1);
     for (int i = 0; i < waypoint_num_; i++)
@@ -61,6 +70,9 @@ namespace ego_planner
     mandatory_stop_sub_ = nh.subscribe("mandatory_stop", 10, &EGOReplanFSM::mandatoryStopCallback, this);
     command_sub_ = nh.subscribe("/command/emergency_stop", 10, &EGOReplanFSM::commandCallback, this);
     mode_trigger_sub_ = nh.subscribe(mode_trigger_topic_, 10, &EGOReplanFSM::modeTriggerCallback, this);
+    tracker_heartbeat_sub_ = nh.subscribe(tracker_heartbeat_topic_, 20, &EGOReplanFSM::trackerHeartbeatCallback, this);
+    tracker_replan_state_sub_ = nh.subscribe(tracker_replan_state_topic_, 20, &EGOReplanFSM::trackerReplanStateCallback, this);
+    tracker_land_trigger_sub_ = nh.subscribe(tracker_land_trigger_topic_, 10, &EGOReplanFSM::trackerLandTriggerCallback, this);
 
     /* Use MINCO trajectory to minimize the message size in wireless communication */
     broadcast_ploytraj_pub_ = nh.advertise<traj_utils::MINCOTraj>("planning/broadcast_traj_send", 10);
@@ -74,8 +86,6 @@ namespace ego_planner
     state_pub_          = nh.advertise<std_msgs::Int8>("state", 10);
     ego_plan_state_pub_ = nh.advertise<quadrotor_msgs::EgoPlannerResult>("/planning/ego_plan_result", 10);
     ego_state_trigger_pub_ = nh.advertise<quadrotor_msgs::EgoStateTrigger>("/planning/ego_state_trigger", 10);
-    tracker_trigger_pub_ = nh.advertise<geometry_msgs::PoseStamped>(tracker_trigger_topic_, 10);
-    tracker_preempt_pub_ = nh.advertise<std_msgs::Empty>(tracker_preempt_topic_, 10);
 
     // ROS_INFO("Wait for 3 seconds.");
     // ros::Time t0 = ros::Time::now();
@@ -104,36 +114,40 @@ namespace ego_planner
     else
       cout << "Wrong target_type_ value! target_type_=" << target_type_ << endl;
 
-    ROS_INFO("Planner started. mode_trigger_topic=%s, tracker_trigger_topic=%s, tracker_preempt_topic=%s, default_mode=%d",
-             mode_trigger_topic_.c_str(), tracker_trigger_topic_.c_str(), tracker_preempt_topic_.c_str(), planner_mode_);
+    ROS_INFO("Planner started. mode_trigger_topic=%s, tracker_heartbeat_topic=%s, tracker_replan_state_topic=%s, default_mode=%d",
+             mode_trigger_topic_.c_str(), tracker_heartbeat_topic_.c_str(), tracker_replan_state_topic_.c_str(), planner_mode_);
   }
 
   void EGOReplanFSM::execFSMCallback(const ros::TimerEvent &e)
   {
     exec_timer_.stop(); // To avoid blockage, because execFSMCallback will call ros::spinOnce() inside
     traj_server_.feedDog();
-    if (planner_mode_ == MODE_TRACKER)
+
+    if (planner_mode_ != active_mode_ &&
+        exec_state_ != MODE_SWITCH_PREPARE &&
+        exec_state_ != COMMAND_STOP &&
+        exec_state_ != EMERGENCY_STOP)
     {
-      if (!tracker_mode_latched_)
-      {
-        tracker_mode_latched_ = true;
-        have_trigger_ = false;
-        if (have_odom_)
-        {
-          callEmergencyStop(odom_pos_);
-        }
-        changeFSMExecState(WAIT_TARGET, "MODE_TRACKER");
-      }
-      goto force_return;
+      changeFSMExecState(MODE_SWITCH_PREPARE, "MODE_REQ");
     }
 
-    tracker_mode_latched_ = false;
-    // measureGroundHeight();
-    // measureGroundHeight2();
-    mondifyInCollisionFinalGoal();
-    checkCollision();
-    planningReturnsChk();
-    evaluateEnvironmentDensity();
+    const bool in_ego_fsm =
+        exec_state_ == INIT ||
+        exec_state_ == EGO_WAIT_TARGET ||
+        exec_state_ == EGO_SEQUENTIAL_START ||
+        exec_state_ == EGO_GEN_NEW_TRAJ ||
+        exec_state_ == EGO_REPLAN_TRAJ ||
+        exec_state_ == EGO_EXEC_TRAJ ||
+        exec_state_ == CRASH_RECOVER;
+    if (active_mode_ == MODE_EGO && in_ego_fsm)
+    {
+      // measureGroundHeight();
+      // measureGroundHeight2();
+      mondifyInCollisionFinalGoal();
+      checkCollision();
+      planningReturnsChk();
+      evaluateEnvironmentDensity();
+    }
 
     static int fsm_num = 0;
     fsm_num++;
@@ -151,74 +165,108 @@ namespace ego_planner
       {
         goto force_return; // return;
       }
-      changeFSMExecState(WAIT_TARGET, "EGOFSM");
+      changeFSMExecState(MODE_SWITCH_PREPARE, "INIT");
       break;
     }
 
-    case WAIT_TARGET:
+    case MODE_SWITCH_PREPARE:
+    {
+      if (!switch_latched_)
+      {
+        switch_latched_ = true;
+        have_trigger_ = false;
+        tracker_land_requested_ = false;
+        if (have_odom_)
+        {
+          callEmergencyStop(odom_pos_);
+        }
+      }
+
+      if (have_odom_ && odom_vel_.norm() > 0.2)
+      {
+        goto force_return;
+      }
+
+      active_mode_ = planner_mode_;
+      switch_latched_ = false;
+      if (active_mode_ == MODE_TRACKER)
+      {
+        changeFSMExecState(TRACK_WAIT_TARGET, "MODE_SWITCH");
+      }
+      else
+      {
+        syncEgoStartPoseFromOdom();
+        if (have_target_)
+          have_trigger_ = true;
+        changeFSMExecState(EGO_WAIT_TARGET, "MODE_SWITCH");
+      }
+      break;
+    }
+
+    case EGO_WAIT_TARGET:
     {
       if (!have_target_ || !have_trigger_ || !yaw_cmd_.yaw_reach)
         goto force_return; // return;
       else
       {
-        changeFSMExecState(SEQUENTIAL_START, "EGOFSM");
+        changeFSMExecState(EGO_SEQUENTIAL_START, "EGOFSM");
       }
       break;
     }
 
-    case SEQUENTIAL_START: // for swarm or single drone with drone_id = 0
+    case EGO_SEQUENTIAL_START: // for swarm or single drone with drone_id = 0
     {
       if (planner_manager_->pp_.drone_id <= 0 || (planner_manager_->pp_.drone_id >= 1 && have_recv_pre_agent_))
       {
         bool success = planFromGlobalTraj(10); // zx-todo
         if (success)
         {
-          changeFSMExecState(EXEC_TRAJ, "EGOFSM");
+          changeFSMExecState(EGO_EXEC_TRAJ, "EGOFSM");
         }
         else
         {
           EGO_WARN("Failed to generate the first trajectory, keep trying");
-          changeFSMExecState(SEQUENTIAL_START, "EGOFSM"); // "changeFSMExecState" must be called each time planned
+          changeFSMExecState(EGO_SEQUENTIAL_START, "EGOFSM"); // "changeFSMExecState" must be called each time planned
         }
       }
 
       break;
     }
 
-    case GEN_NEW_TRAJ:
+    case EGO_GEN_NEW_TRAJ:
     {
       bool success = planFromGlobalTraj(10); // zx-todo
-      EGO_WARN("GEN_NEW_TRAJ!: %d", success);
+      EGO_WARN("EGO_GEN_NEW_TRAJ!: %d", success);
 
       if (success)
       {
-        changeFSMExecState(EXEC_TRAJ, "EGOFSM");
+        changeFSMExecState(EGO_EXEC_TRAJ, "EGOFSM");
         flag_escape_emergency_ = true;
       }
       else
       {
-        changeFSMExecState(GEN_NEW_TRAJ, "EGOFSM"); // "changeFSMExecState" must be called each time planned
+        changeFSMExecState(EGO_GEN_NEW_TRAJ, "EGOFSM"); // "changeFSMExecState" must be called each time planned
       }
       break;
     }
 
-    case REPLAN_TRAJ:
+    case EGO_REPLAN_TRAJ:
     {
 
       if (planFromLocalTraj(1))
       {
-        changeFSMExecState(EXEC_TRAJ, "EGOFSM");
+        changeFSMExecState(EGO_EXEC_TRAJ, "EGOFSM");
       }
       else
       {
-        // changeFSMExecState(REPLAN_TRAJ, "FSM");
-        changeFSMExecState(GEN_NEW_TRAJ, "EGOFSM");
+        // changeFSMExecState(EGO_REPLAN_TRAJ, "FSM");
+        changeFSMExecState(EGO_GEN_NEW_TRAJ, "EGOFSM");
       }
 
       break;
     }
 
-    case EXEC_TRAJ:
+    case EGO_EXEC_TRAJ:
     {
       /* determine if need to replan */
       LocalTrajData *info = &planner_manager_->traj_.local_traj;
@@ -296,12 +344,12 @@ namespace ego_planner
           }
 
           /* The navigation task completed */
-          changeFSMExecState(WAIT_TARGET, "EGOFSM");
+          changeFSMExecState(EGO_WAIT_TARGET, "EGOFSM");
         }
         else
         {
           ROS_ERROR("t_cur > info->duration but touch_goal_ is false! ERROR");
-          changeFSMExecState(WAIT_TARGET, "EGOFSM"); // no better choises
+          changeFSMExecState(EGO_WAIT_TARGET, "EGOFSM"); // no better choises
         }
         quadrotor_msgs::EgoStateTrigger trigger_msg;
         // 赋予ros时间戳
@@ -313,14 +361,14 @@ namespace ego_planner
                !close_to_final_goal) // case 3: time to perform next replan
       {
         cout << "uk_see_alot=" << uk_see_alot << " case2=" << (!touch_goal_ && close_to_current_traj_end) << " CASE3=" << (final_goal_ - pos).norm() << endl;
-        changeFSMExecState(REPLAN_TRAJ, "EGOFSM");
+        changeFSMExecState(EGO_REPLAN_TRAJ, "EGOFSM");
       }
       else if (planner_manager_->pp_.desvel_changed_toomuch_ &&
                !close_to_final_goal) // case 4: desired velocity limits changes too much
       {
         cout << "desvel_changed_toomuch_=" << planner_manager_->pp_.desvel_changed_toomuch_ << endl;
         planner_manager_->pp_.desvel_changed_toomuch_ = false;
-        changeFSMExecState(REPLAN_TRAJ, "EGOFSM");
+        changeFSMExecState(EGO_REPLAN_TRAJ, "EGOFSM");
       }
 
       break;
@@ -335,8 +383,12 @@ namespace ego_planner
       }
       else
       {
-        if (enable_fail_safe_ && odom_vel_.norm() < 0.1){
-          changeFSMExecState(GEN_NEW_TRAJ, "EGOFSM");
+        if (enable_fail_safe_ && odom_vel_.norm() < 0.1)
+        {
+          if (active_mode_ == MODE_TRACKER)
+            changeFSMExecState(TRACK_GEN_NEW_TRAJ, "TRACKFSM");
+          else
+            changeFSMExecState(EGO_GEN_NEW_TRAJ, "EGOFSM");
         }
       }
 
@@ -357,7 +409,7 @@ namespace ego_planner
       }
 
       if (enable_fail_safe_ && odom_vel_.norm() < 0.1) {
-        changeFSMExecState(GEN_NEW_TRAJ, "EGOFSM");
+        changeFSMExecState(MODE_SWITCH_PREPARE, "Command stop");
       }
       break;
     }
@@ -374,7 +426,7 @@ namespace ego_planner
         if (planner_manager_->map_->sml_->getInflateOccupancy(odom_pos_) <= 0)
         {
           flag_wait_crash_rec_ = false;
-          changeFSMExecState(GEN_NEW_TRAJ, "EGOFSM");
+          changeFSMExecState(EGO_GEN_NEW_TRAJ, "EGOFSM");
         }
       }
       else
@@ -389,10 +441,185 @@ namespace ego_planner
           ROS_ERROR("Totally get stuck in obs! I can do nothing!");
           have_trigger_ = false;
           have_target_ = false;
-          changeFSMExecState(WAIT_TARGET, "EGOFSM");
+          changeFSMExecState(EGO_WAIT_TARGET, "EGOFSM");
         }
       }
 
+      break;
+    }
+
+    case TRACK_WAIT_TARGET:
+    {
+      if (planner_mode_ != MODE_TRACKER)
+      {
+        changeFSMExecState(MODE_SWITCH_PREPARE, "TRACKFSM");
+        break;
+      }
+
+      if (!have_tracker_heartbeat_)
+      {
+        goto force_return;
+      }
+
+      if ((ros::Time::now() - last_tracker_heartbeat_).toSec() > tracker_heartbeat_timeout_)
+      {
+        ROS_WARN_THROTTLE(1.0, "\033[32m[EGO]\033[0m Waiting tracker heartbeat...");
+        goto force_return;
+      }
+
+      if (tracker_land_requested_)
+        changeFSMExecState(TRACK_LAND_EXEC, "TRACKFSM");
+      else
+        changeFSMExecState(TRACK_SEQUENTIAL_START, "TRACKFSM");
+      break;
+    }
+
+    case TRACK_SEQUENTIAL_START:
+    {
+      if (planner_mode_ != MODE_TRACKER)
+      {
+        changeFSMExecState(MODE_SWITCH_PREPARE, "TRACKFSM");
+        break;
+      }
+
+      if (tracker_replan_state_ == 0)
+      {
+        changeFSMExecState(TRACK_EXEC_TRAJ, "TRACKFSM");
+      }
+      else if (tracker_replan_state_ == 2)
+      {
+        changeFSMExecState(EMERGENCY_STOP, "TRACKFSM");
+      }
+      else
+      {
+        changeFSMExecState(TRACK_GEN_NEW_TRAJ, "TRACKFSM");
+      }
+      break;
+    }
+
+    case TRACK_GEN_NEW_TRAJ:
+    {
+      if (planner_mode_ != MODE_TRACKER)
+      {
+        changeFSMExecState(MODE_SWITCH_PREPARE, "TRACKFSM");
+        break;
+      }
+
+      if (tracker_replan_state_ == 0)
+      {
+        changeFSMExecState(TRACK_EXEC_TRAJ, "TRACKFSM");
+      }
+      else if (tracker_replan_state_ == -1)
+      {
+        tracker_land_requested_ = false;
+        changeFSMExecState(TRACK_HOVER_HOLD, "TRACKFSM");
+      }
+      else if (tracker_replan_state_ == 2)
+      {
+        changeFSMExecState(EMERGENCY_STOP, "TRACKFSM");
+      }
+      break;
+    }
+
+    case TRACK_REPLAN_TRAJ:
+    {
+      if (planner_mode_ != MODE_TRACKER)
+      {
+        changeFSMExecState(MODE_SWITCH_PREPARE, "TRACKFSM");
+        break;
+      }
+
+      if (tracker_replan_state_ == 0)
+      {
+        changeFSMExecState(TRACK_EXEC_TRAJ, "TRACKFSM");
+      }
+      else if (tracker_replan_state_ == -1)
+      {
+        changeFSMExecState(TRACK_HOVER_HOLD, "TRACKFSM");
+      }
+      else if (tracker_replan_state_ == 2)
+      {
+        changeFSMExecState(EMERGENCY_STOP, "TRACKFSM");
+      }
+      else if (tracker_replan_state_ == -2 || tracker_replan_state_ == 1 || tracker_replan_state_ == 3)
+      {
+        changeFSMExecState(TRACK_GEN_NEW_TRAJ, "TRACKFSM");
+      }
+      break;
+    }
+
+    case TRACK_EXEC_TRAJ:
+    {
+      if (planner_mode_ != MODE_TRACKER)
+      {
+        changeFSMExecState(MODE_SWITCH_PREPARE, "TRACKFSM");
+        break;
+      }
+
+      if ((ros::Time::now() - last_tracker_heartbeat_).toSec() > tracker_heartbeat_timeout_)
+      {
+        changeFSMExecState(TRACK_GEN_NEW_TRAJ, "TRACKFSM");
+        break;
+      }
+
+      if (tracker_land_requested_)
+      {
+        changeFSMExecState(TRACK_LAND_EXEC, "TRACKFSM");
+      }
+      else if (tracker_replan_state_ == -1)
+      {
+        changeFSMExecState(TRACK_HOVER_HOLD, "TRACKFSM");
+      }
+      else if (tracker_replan_state_ == 2)
+      {
+        changeFSMExecState(EMERGENCY_STOP, "TRACKFSM");
+      }
+      else if (tracker_replan_state_ == -2 || tracker_replan_state_ == 1 || tracker_replan_state_ == 3)
+      {
+        changeFSMExecState(TRACK_REPLAN_TRAJ, "TRACKFSM");
+      }
+      break;
+    }
+
+    case TRACK_HOVER_HOLD:
+    {
+      if (planner_mode_ != MODE_TRACKER)
+      {
+        changeFSMExecState(MODE_SWITCH_PREPARE, "TRACKFSM");
+        break;
+      }
+
+      if (tracker_land_requested_)
+      {
+        changeFSMExecState(TRACK_LAND_EXEC, "TRACKFSM");
+      }
+      else if (tracker_replan_state_ == 0)
+      {
+        changeFSMExecState(TRACK_EXEC_TRAJ, "TRACKFSM");
+      }
+      break;
+    }
+
+    case TRACK_LAND_EXEC:
+    {
+      if (planner_mode_ != MODE_TRACKER)
+      {
+        changeFSMExecState(MODE_SWITCH_PREPARE, "TRACKFSM");
+        break;
+      }
+
+      if (!tracker_land_requested_)
+      {
+        changeFSMExecState(TRACK_WAIT_TARGET, "TRACKFSM");
+      }
+      else if (tracker_replan_state_ == -1)
+      {
+        changeFSMExecState(TRACK_HOVER_HOLD, "TRACKFSM");
+      }
+      else if (tracker_replan_state_ == 2)
+      {
+        changeFSMExecState(EMERGENCY_STOP, "TRACKFSM");
+      }
       break;
     }
     }
@@ -415,43 +642,62 @@ namespace ego_planner
       state_pub_.publish(s_m);
     }
 
-    static string state_str[9] = {"INIT", "WAIT_TARGET", "GEN_NEW_TRAJ", "REPLAN_TRAJ", "EXEC_TRAJ", "EMERGENCY_STOP", "SEQUENTIAL_START", "CRASH_RECOVER", "COMMAND_STOP"};
+    static const std::vector<std::string> state_str = {
+        "INIT", "MODE_SWITCH_PREPARE", "EGO_WAIT_TARGET", "EGO_GEN_NEW_TRAJ", "EGO_REPLAN_TRAJ", "EGO_EXEC_TRAJ",
+        "EMERGENCY_STOP", "EGO_SEQUENTIAL_START", "CRASH_RECOVER", "COMMAND_STOP",
+        "TRACK_WAIT_TARGET", "TRACK_SEQUENTIAL_START", "TRACK_GEN_NEW_TRAJ", "TRACK_REPLAN_TRAJ",
+        "TRACK_EXEC_TRAJ", "TRACK_HOVER_HOLD", "TRACK_LAND_EXEC"};
     int pre_s = int(exec_state_);
     exec_state_ = new_state;
+    const int pre_idx = std::max(0, std::min(pre_s, (int)state_str.size() - 1));
+    const int new_idx = std::max(0, std::min((int)new_state, (int)state_str.size() - 1));
     cout << "[" + pos_call + "]"
-         << "Drone:" << planner_manager_->pp_.drone_id << ", from " + state_str[pre_s] + " to " + state_str[int(new_state)] << endl;
+         << "Drone:" << planner_manager_->pp_.drone_id << ", from " + state_str[pre_idx] + " to " + state_str[new_idx] << endl;
   }
 
   void EGOReplanFSM::printFSMExecState() const
   {
-    static string state_str[9] = {"INIT", "WAIT_TARGET", "GEN_NEW_TRAJ", "REPLAN_TRAJ", "EXEC_TRAJ", "EMERGENCY_STOP", "SEQUENTIAL_START", "CRASH_RECOVER", "COMMAND_STOP"};
+    static const std::vector<std::string> state_str = {
+        "INIT", "MODE_SWITCH_PREPARE", "EGO_WAIT_TARGET", "EGO_GEN_NEW_TRAJ", "EGO_REPLAN_TRAJ", "EGO_EXEC_TRAJ",
+        "EMERGENCY_STOP", "EGO_SEQUENTIAL_START", "CRASH_RECOVER", "COMMAND_STOP",
+        "TRACK_WAIT_TARGET", "TRACK_SEQUENTIAL_START", "TRACK_GEN_NEW_TRAJ", "TRACK_REPLAN_TRAJ",
+        "TRACK_EXEC_TRAJ", "TRACK_HOVER_HOLD", "TRACK_LAND_EXEC"};
+    const int idx = std::max(0, std::min((int)exec_state_, (int)state_str.size() - 1));
 
-    cout << "\r[FSM]: state: " + state_str[int(exec_state_)] << ", Drone:" << planner_manager_->pp_.drone_id;
+    cout << "\r[FSM]: state: " + state_str[idx] << ", Drone:" << planner_manager_->pp_.drone_id;
 
     // some warnings
-    if (!have_odom_ || !have_target_ || !have_trigger_ || !yaw_cmd_.yaw_reach || (planner_manager_->pp_.drone_id >= 1 && !have_recv_pre_agent_))
+    if (active_mode_ == MODE_TRACKER)
     {
-      cout << ". Waiting for ";
+      if (!have_tracker_heartbeat_)
+        cout << ". Waiting for tracker_heartbeat,";
     }
-    if (!have_odom_)
+    else
     {
-      cout << "odom,";
-    }
-    if (!have_target_)
-    {
-      cout << "target,";
-    }
-    if (!have_trigger_)
-    {
-      cout << "trigger,";
-    }
-    if (planner_manager_->pp_.drone_id >= 1 && !have_recv_pre_agent_)
-    {
-      cout << "prev traj,";
-    }
-    if (!yaw_cmd_.yaw_reach)
-    {
-      cout << "yaw_reach,";
+      if (!have_odom_ || !have_target_ || !have_trigger_ || !yaw_cmd_.yaw_reach || (planner_manager_->pp_.drone_id >= 1 && !have_recv_pre_agent_))
+      {
+        cout << ". Waiting for ";
+      }
+      if (!have_odom_)
+      {
+        cout << "odom,";
+      }
+      if (!have_target_)
+      {
+        cout << "target,";
+      }
+      if (!have_trigger_)
+      {
+        cout << "trigger,";
+      }
+      if (planner_manager_->pp_.drone_id >= 1 && !have_recv_pre_agent_)
+      {
+        cout << "prev traj,";
+      }
+      if (!yaw_cmd_.yaw_reach)
+      {
+        cout << "yaw_reach,";
+      }
     }
 
     cout << endl;
@@ -542,7 +788,7 @@ namespace ego_planner
 
         /* The navigation task terminated */
         callEmergencyStop(odom_pos_);
-        changeFSMExecState(WAIT_TARGET, "RetChk");
+        changeFSMExecState(EGO_WAIT_TARGET, "RetChk");
       }
     }
   }
@@ -564,7 +810,7 @@ namespace ego_planner
     auto map = planner_manager_->map_;
     const double t_cur = ros::Time::now().toSec() - traj->start_time;
 
-    if (exec_state_ == WAIT_TARGET || traj->traj_id <= 0)
+    if (exec_state_ == EGO_WAIT_TARGET || traj->traj_id <= 0)
     {
       return;
     }
@@ -579,7 +825,7 @@ namespace ego_planner
     else
       enable_fail_safe_ = true;
 
-    if (exec_state_ != EXEC_TRAJ &&
+    if (exec_state_ != EGO_EXEC_TRAJ &&
         exec_state_ != CRASH_RECOVER &&
         odom_vel_.norm() < 0.1 &&
         map->getOcc(odom_pos_) > 0) // get stuck in obstacles
@@ -643,7 +889,7 @@ namespace ego_planner
         if (ret) // Make a chance
         {
           ROS_INFO("Plan success when detect collision. %f", t / traj->duration);
-          changeFSMExecState(EXEC_TRAJ, "SAFETY");
+          changeFSMExecState(EGO_EXEC_TRAJ, "SAFETY");
           return;
         }
         else
@@ -663,7 +909,7 @@ namespace ego_planner
               if (ret)
               {
                 ROS_INFO("Emergency plan success when detect collision. %f", t / traj->duration);
-                changeFSMExecState(EXEC_TRAJ, "SAFETY");
+                changeFSMExecState(EGO_EXEC_TRAJ, "SAFETY");
                 return;
               }
               else
@@ -679,7 +925,7 @@ namespace ego_planner
           else if (!flag_wait_crash_rec_)
           {
             EGO_WARN("current traj in collision, replan.");
-            changeFSMExecState(REPLAN_TRAJ, "SAFETY");
+            changeFSMExecState(EGO_REPLAN_TRAJ, "SAFETY");
           }
           else
           {
@@ -800,7 +1046,7 @@ namespace ego_planner
     PLAN_RET ret = PLAN_RET::DEFAULT_FAIL;
 
     // first trial
-    if (cur_traj_to_cur_target_ && getTrajPVAJ("traj")) // zx-todo this logic will make REPLAN_TRAJ state plan trajs again and again even it keeps fail. I modified REPLAN_TRAJ logic
+    if (cur_traj_to_cur_target_ && getTrajPVAJ("traj")) // zx-todo this logic will make EGO_REPLAN_TRAJ state plan trajs again and again even it keeps fail. I modified EGO_REPLAN_TRAJ logic
       ret = callReboundReplan(true, false, NULL);
 
     if (ret != PLAN_RET::SUCCESS)
@@ -878,14 +1124,14 @@ namespace ego_planner
     have_target_ = true;
     cur_traj_to_cur_target_ = false;
 
-    if (exec_state_ == WAIT_TARGET)
+    if (exec_state_ == EGO_WAIT_TARGET)
     {
       /*** turn the yaw ***/
       Eigen::Vector2d dxy = final_goal_.block<2, 1>(0, 0) - odom_pos_.block<2, 1>(0, 0);
       if (dxy.norm() > 0.1 && look_forward ) // 0.1m
       {
         double des_yaw = atan2(dxy(1), dxy(0));
-        yaw_cmd_.yaw_reach = false; // this will work only if the drone state is WAIT_TARGET
+        yaw_cmd_.yaw_reach = false; // this will work only if the drone state is EGO_WAIT_TARGET
         yaw_cmd_.cmd_time = ros::Time::now();
         yaw_cmd_.des_yaw = des_yaw;
         Eigen::Matrix3d M = odom_q_.matrix();
@@ -894,7 +1140,7 @@ namespace ego_planner
 
       if (!look_forward)
       {
-        yaw_cmd_.yaw_reach = false; // this will work only if the drone state is WAIT_TARGET
+        yaw_cmd_.yaw_reach = false; // this will work only if the drone state is EGO_WAIT_TARGET
         yaw_cmd_.cmd_time = ros::Time::now();
         yaw_cmd_.des_yaw = next_yaw;
         Eigen::Matrix3d M = odom_q_.matrix();
@@ -904,7 +1150,7 @@ namespace ego_planner
 
     if (!look_forward)
     {
-      yaw_cmd_.yaw_reach = false; // this will work only if the drone state is WAIT_TARGET
+      yaw_cmd_.yaw_reach = false; // this will work only if the drone state is EGO_WAIT_TARGET
       yaw_cmd_.cmd_time = ros::Time::now();
       yaw_cmd_.des_yaw = next_yaw;
       Eigen::Matrix3d M = odom_q_.matrix();
@@ -916,9 +1162,9 @@ namespace ego_planner
     }
 
     /*** FSM ***/
-    // [gym] 所有状态都直接GEN_NEW_TRAJ,否则规划延迟
-//    if (exec_state_ != WAIT_TARGET)
-    changeFSMExecState(GEN_NEW_TRAJ, "TRIG");
+    // [gym] 所有状态都直接EGO_GEN_NEW_TRAJ,否则规划延迟
+//    if (exec_state_ != EGO_WAIT_TARGET)
+    changeFSMExecState(EGO_GEN_NEW_TRAJ, "TRIG");
 
     /*** display ***/
     vector<Eigen::Vector3d> gloabl_traj(2);
@@ -1086,7 +1332,7 @@ namespace ego_planner
   {
     // if (msg->goal[2] < -0.1)
     //   return;
-    if (planner_mode_ != MODE_EGO)
+    if (active_mode_ != MODE_EGO)
     {
       ROS_WARN_THROTTLE(1.0, "\033[32m[EGO]\033[0m Ignore waypoint trigger while in tracker mode.");
       return;
@@ -1110,7 +1356,7 @@ namespace ego_planner
              msg->drone_id, msg->goal[0], msg->goal[1], msg->goal[2], (int)msg->look_forward, msg->yaw);
     if (msg->drone_id != planner_manager_->pp_.drone_id)
       return;
-    if (planner_mode_ != MODE_EGO)
+    if (active_mode_ != MODE_EGO)
     {
       ROS_WARN_THROTTLE(1.0, "\033[32m[EGO]\033[0m Ignore ego goal while in tracker mode.");
       return;
@@ -1200,7 +1446,7 @@ namespace ego_planner
 
   void EGOReplanFSM::triggerCallback(const geometry_msgs::PoseStampedPtr &msg)
   {
-    if (planner_mode_ != MODE_EGO)
+    if (active_mode_ != MODE_EGO)
     {
       ROS_WARN_THROTTLE(1.0, "\033[32m[EGO]\033[0m Ignore manual trigger while in tracker mode.");
       return;
@@ -1213,58 +1459,67 @@ namespace ego_planner
   void EGOReplanFSM::modeTriggerCallback(const std_msgs::Int32::ConstPtr &msg)
   {
     const int trigger_mode = msg->data;
-    if (trigger_mode == MODE_EGO)
+    if (trigger_mode != MODE_EGO && trigger_mode != MODE_TRACKER)
     {
-      planner_mode_ = MODE_EGO;
-      tracker_mode_latched_ = false;
+      ROS_WARN("\033[32m[EGO]\033[0m Unknown mode trigger=%d, ignore.", trigger_mode);
+      return;
+    }
+
+    planner_mode_ = trigger_mode;
+    if (planner_mode_ == MODE_EGO)
+    {
       command_stop_ = false;
-      publishTrackerPreempt(3);
-      if (have_target_)
-      {
-        have_trigger_ = true;
-      }
+      tracker_land_requested_ = false;
       ROS_INFO("\033[32m[EGO]\033[0m Mode trigger=%d -> EGO planner active.", trigger_mode);
-      return;
     }
-
-    if (trigger_mode == MODE_TRACKER)
+    else
     {
-      planner_mode_ = MODE_TRACKER;
       have_trigger_ = false;
-      publishTrackerPreempt(3);
-      publishTrackerTrigger(3);
+      tracker_land_requested_ = false;
       ROS_INFO("\033[32m[EGO]\033[0m Mode trigger=%d -> TRACKER planner active.", trigger_mode);
+    }
+
+    if (exec_state_ != MODE_SWITCH_PREPARE && exec_state_ != COMMAND_STOP && exec_state_ != EMERGENCY_STOP)
+    {
+      changeFSMExecState(MODE_SWITCH_PREPARE, "Mode trigger");
+    }
+  }
+
+  void EGOReplanFSM::trackerHeartbeatCallback(const std_msgs::Empty::ConstPtr &msg)
+  {
+    (void)msg;
+    have_tracker_heartbeat_ = true;
+    last_tracker_heartbeat_ = ros::Time::now();
+  }
+
+  void EGOReplanFSM::trackerReplanStateCallback(const quadrotor_msgs::ReplanState::ConstPtr &msg)
+  {
+    tracker_replan_state_ = msg->state;
+  }
+
+  void EGOReplanFSM::trackerLandTriggerCallback(const geometry_msgs::PoseStampedConstPtr &msg)
+  {
+    (void)msg;
+    tracker_land_requested_ = true;
+  }
+
+  void EGOReplanFSM::syncEgoStartPoseFromOdom()
+  {
+    if (!have_odom_)
       return;
-    }
 
-    ROS_WARN("\033[32m[EGO]\033[0m Unknown mode trigger=%d, ignore.", trigger_mode);
-  }
+    start_pt_ = odom_pos_;
+    start_vel_ = odom_vel_;
+    start_acc_.setZero();
+    start_jerk_.setZero();
+    glb_start_pt_ = odom_pos_;
 
-  void EGOReplanFSM::publishTrackerPreempt(int repeat)
-  {
-    std_msgs::Empty msg;
-    const int cnt = std::max(1, repeat);
-    for (int i = 0; i < cnt; ++i)
-    {
-      tracker_preempt_pub_.publish(msg);
-    }
-  }
-
-  void EGOReplanFSM::publishTrackerTrigger(int repeat)
-  {
-    geometry_msgs::PoseStamped msg;
-    msg.header.frame_id = "world";
-    msg.pose.position.x = 0.0;
-    msg.pose.position.y = 0.0;
-    msg.pose.position.z = 1.0;
-    msg.pose.orientation.w = 1.0;
-
-    const int cnt = std::max(1, repeat);
-    for (int i = 0; i < cnt; ++i)
-    {
-      msg.header.stamp = ros::Time::now();
-      tracker_trigger_pub_.publish(msg);
-    }
+    Eigen::Matrix3d M = odom_q_.matrix();
+    double yaw_now = atan2(M(1, 0), M(0, 0));
+    yaw_cmd_.des_yaw = yaw_now;
+    yaw_cmd_.yaw_reach = true;
+    yaw_cmd_.cmd_time = ros::Time::now();
+    traj_server_.setYaw(yaw_now, yaw_now, odom_pos_, false);
   }
 
   void EGOReplanFSM::RecvBroadcastMINCOTrajCallback(const traj_utils::MINCOTrajConstPtr &msg)
@@ -1378,9 +1633,9 @@ namespace ego_planner
       /* Check Collision */
       if (planner_manager_->checkCollision(recv_id))
       {
-        if (!mandatory_stop_)
+        if (!mandatory_stop_ && active_mode_ == MODE_EGO)
         {
-          changeFSMExecState(REPLAN_TRAJ, "SWARM_CHECK");
+          changeFSMExecState(EGO_REPLAN_TRAJ, "SWARM_CHECK");
         }
       }
 

@@ -22,6 +22,7 @@
 #include <quadrotor_msgs/EgoGoalSet.h>
 #include <quadrotor_msgs/EgoPlannerResult.h>
 #include <quadrotor_msgs/EgoStateTrigger.h>
+#include <quadrotor_msgs/ReplanState.h>
 #include <traj_utils/DataDisp.h>
 #include <plan_manage/planner_manager.h>
 #include <traj_utils/planning_visualization.h>
@@ -51,14 +52,22 @@ namespace ego_planner
     enum FSM_EXEC_STATE
     {
       INIT,
-      WAIT_TARGET,
-      GEN_NEW_TRAJ,
-      REPLAN_TRAJ,
-      EXEC_TRAJ,
+      MODE_SWITCH_PREPARE,
+      EGO_WAIT_TARGET,
+      EGO_GEN_NEW_TRAJ,
+      EGO_REPLAN_TRAJ,
+      EGO_EXEC_TRAJ,
       EMERGENCY_STOP,
-      SEQUENTIAL_START,
+      EGO_SEQUENTIAL_START,
       CRASH_RECOVER,
-      COMMAND_STOP
+      COMMAND_STOP,
+      TRACK_WAIT_TARGET,
+      TRACK_SEQUENTIAL_START,
+      TRACK_GEN_NEW_TRAJ,
+      TRACK_REPLAN_TRAJ,
+      TRACK_EXEC_TRAJ,
+      TRACK_HOVER_HOLD,
+      TRACK_LAND_EXEC
     };
     enum TARGET_TYPE
     {
@@ -110,11 +119,17 @@ namespace ego_planner
     bool enable_ground_height_measurement_;
     bool flag_escape_emergency_;
     bool flag_wait_crash_rec_;
-    int planner_mode_;
-    bool tracker_mode_latched_;
+    int planner_mode_; // desired mode from trigger
+    int active_mode_;  // currently active planning domain
+    bool switch_latched_;
     ros::Time crash_rec_start_time_;
     ros::Time last_density_eval_time_{ros::Time(0)};
-    string mode_trigger_topic_, tracker_trigger_topic_, tracker_preempt_topic_;
+    ros::Time last_tracker_heartbeat_{ros::Time(0)};
+    bool have_tracker_heartbeat_;
+    int tracker_replan_state_;
+    bool tracker_land_requested_;
+    double tracker_heartbeat_timeout_;
+    string mode_trigger_topic_, tracker_heartbeat_topic_, tracker_replan_state_topic_, tracker_land_trigger_topic_;
 
     bool have_trigger_, have_target_, have_odom_, cur_traj_to_cur_target_, have_recv_pre_agent_, touch_goal_, mandatory_stop_, command_stop_;
     bool has_been_modified_;
@@ -133,8 +148,9 @@ namespace ego_planner
     ros::NodeHandle node_;
     ros::Timer exec_timer_, safety_timer_;
     ros::Subscriber waypoint_sub_, odom_sub_, trigger_sub_, broadcast_ploytraj_sub_, mandatory_stop_sub_, command_sub_, mode_trigger_sub_;
+    ros::Subscriber tracker_heartbeat_sub_, tracker_replan_state_sub_, tracker_land_trigger_sub_;
     ros::Publisher data_disp_pub_, broadcast_ploytraj_pub_, ground_height_pub_, state_pub_, ego_state_trigger_pub_;
-    ros::Publisher ego_plan_state_pub_, tracker_trigger_pub_, tracker_preempt_pub_;
+    ros::Publisher ego_plan_state_pub_;
 
     /* state machine functions */
     void execFSMCallback(const ros::TimerEvent &e);
@@ -166,10 +182,12 @@ namespace ego_planner
     void odometryCallback(const nav_msgs::OdometryConstPtr &msg);
     void triggerCallback(const geometry_msgs::PoseStampedPtr &msg);
     void modeTriggerCallback(const std_msgs::Int32::ConstPtr &msg);
+    void trackerHeartbeatCallback(const std_msgs::Empty::ConstPtr &msg);
+    void trackerReplanStateCallback(const quadrotor_msgs::ReplanState::ConstPtr &msg);
+    void trackerLandTriggerCallback(const geometry_msgs::PoseStampedConstPtr &msg);
     void RecvBroadcastMINCOTrajCallback(const traj_utils::MINCOTrajConstPtr &msg);
     void polyTraj2ROSMsg(traj_utils::PolyTraj *poly_msg, traj_utils::MINCOTraj *MINCO_msg);
-    void publishTrackerPreempt(int repeat = 1);
-    void publishTrackerTrigger(int repeat = 1);
+    void syncEgoStartPoseFromOdom();
 
     /* utils */
     void initEgoPlanResult();
