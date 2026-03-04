@@ -156,7 +156,7 @@ start_track() {
     fi
 
     local yolo_topic="${YOLO_TOPIC:-/target/odom}"
-    local odom_topic="${ODOM_TOPIC:-/track_ekf/ekf_odom}"
+    local odom_topic="${ODOM_TOPIC:-/drone_0_visual_slam/odom}"
     local local_map_topic="${LOCAL_MAP_TOPIC:-/drone_0_ego_planner_node/grid_map/occupancy_inflate}"
     local track_trigger_topic="${TRACK_TRIGGER_TOPIC:-/tracker_trigger}"
     local track_preempt_topic="${TRACK_PREEMPT_TOPIC:-/tracker_preempt}"

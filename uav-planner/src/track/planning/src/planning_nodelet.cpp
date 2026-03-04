@@ -37,6 +37,9 @@
 namespace planning {
 
 Eigen::IOFormat CommaInitFmt(Eigen::StreamPrecision, Eigen::DontAlignCols, ", ", ", ", "", "", " << ", ";");
+inline double angle_diff(const double a, const double b) {
+  return std::atan2(std::sin(a - b), std::cos(a - b));
+}
 
 class Nodelet : public nodelet::Nodelet {
  private:
@@ -45,7 +48,7 @@ class Nodelet : public nodelet::Nodelet {
   static constexpr int MODE_TRACKER = 2;
 
   std::thread initThread_;
-  ros::Subscriber gridmap_sub_, odom_sub_, target_sub_, triger_sub_, land_triger_sub_, preempt_sub_, mode_trigger_sub_;
+  ros::Subscriber gridmap_sub_, odom_sub_, target_sub_, triger_sub_, land_triger_sub_, preempt_sub_, mode_trigger_sub_, cmd_owner_sub_;
   ros::Timer plan_timer_;
 
   ros::Publisher traj_pub_, heartbeat_pub_, replanState_pub_, hover_log_pub_, preempt_pub_, mode_state_pub_, tracker_session_pub_, takeover_ready_pub_;
@@ -296,6 +299,18 @@ class Nodelet : public nodelet::Nodelet {
       TRACK_STEP("S00 mode trigger switched to standby (mode=%d), tracker states reset.", mode);
     }
     publish_mode_state();
+  }
+
+  void cmd_owner_callback(const std_msgs::Int32::ConstPtr& msgPtr) {
+    const int owner = msgPtr->data;
+    // EGO takes command ownership: force tracker standby even if mode trigger was missed.
+    if (owner == MODE_EGO && planner_mode_.load() == MODE_TRACKER) {
+      planner_mode_ = MODE_EGO;
+      reset_tracker_runtime(true, true, true, true, "CMD_OWNER_EGO");
+      TRACK_WARN("Cmd owner switched to EGO, force tracker standby.");
+      TRACK_STEP("S00 cmd_owner forced tracker standby.");
+      publish_mode_state();
+    }
   }
 
   void land_triger_callback(const geometry_msgs::PoseStampedConstPtr& msgPtr) {
@@ -562,6 +577,7 @@ class Nodelet : public nodelet::Nodelet {
   void plan_timer_callback(const ros::TimerEvent& event) {
     (void)event;
     heartbeat_pub_.publish(std_msgs::Empty());
+    publish_mode_state();
     if (!trigger_active()) {
       return;
     }
@@ -636,9 +652,11 @@ class Nodelet : public nodelet::Nodelet {
       double desired_yaw = std::atan2(dp.y(), dp.x());
       Eigen::Vector3d project_yaw = odom_q.toRotationMatrix().col(0);  // NOTE ZYX
       double now_yaw = std::atan2(project_yaw.y(), project_yaw.x());
-      if (std::fabs((target_p - odom_p).norm() - tracking_dist_) < tolerance_d_ &&
+      const double dist_err = std::fabs((target_p - odom_p).norm() - tracking_dist_);
+      const double yaw_err = std::fabs(angle_diff(desired_yaw, now_yaw));
+      if (dist_err < tolerance_d_ &&
           odom_v.norm() < 0.1 && target_v.norm() < 0.2 &&
-          std::fabs(desired_yaw - now_yaw) < 0.5) {
+          yaw_err < 0.5) {
         if (!wait_hover_) {
           pub_hover_p(odom_p, ros::Time::now());
           wait_hover_ = true;
@@ -650,6 +668,10 @@ class Nodelet : public nodelet::Nodelet {
         replanState_pub_.publish(replanStateMsg_);
         return;
       } else {
+        if (dist_err < tolerance_d_) {
+          TRACK_STEP_THROTTLE(1.0, "S04 distance in tolerance but hover gate blocked: |odom_v|=%.2f, |target_v|=%.2f, yaw_err=%.2f",
+                              odom_v.norm(), target_v.norm(), yaw_err);
+        }
         wait_hover_ = false;
       }
     }
@@ -859,6 +881,7 @@ class Nodelet : public nodelet::Nodelet {
       replanState_pub_.publish(replanStateMsg_);
       TRACK_STEP_THROTTLE(2.0, "S09 replan failed while force_hover=true -> keep hover.");
       return;
+    // } else if (have_active_traj_ && !validcheck(traj_poly_, replan_stamp_)) {
     } else if (have_active_traj_ && validcheck(traj_poly_, replan_stamp_)) {
       force_hover_ = true;
       ROS_FATAL("[planner] EMERGENCY STOP!!!");
@@ -1261,6 +1284,7 @@ class Nodelet : public nodelet::Nodelet {
     land_triger_sub_ = nh.subscribe<geometry_msgs::PoseStamped>("land_triger", 10, &Nodelet::land_triger_callback, this, ros::TransportHints().tcpNoDelay());
     preempt_sub_ = nh.subscribe<std_msgs::Empty>("preempt", 10, &Nodelet::preempt_callback, this, ros::TransportHints().tcpNoDelay());
     mode_trigger_sub_ = nh.subscribe<std_msgs::Int32>("mode_trigger", 10, &Nodelet::mode_trigger_callback, this, ros::TransportHints().tcpNoDelay());
+    cmd_owner_sub_ = nh.subscribe<std_msgs::Int32>("cmd_owner", 10, &Nodelet::cmd_owner_callback, this, ros::TransportHints().tcpNoDelay());
     TRACK_WARN("Planning node initialized!");
     TRACK_STEP("Step logger enabled (orange): S00~S09.");
   }

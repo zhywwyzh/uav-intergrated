@@ -13,7 +13,7 @@
   <arg name="cmd_owner_topic" default="/uav_planner/cmd_owner"/>
   <arg name="position_cmd_topic" default="position_cmd"/>
   <arg name="tracker_cmd_period_sec" default="0.01"/>
-  <arg name="tracker_yaw_rate_max" default="0.8"/>
+  <arg name="tracker_yaw_rate_max" default="1.5"/>
 
   <!-- <node pkg="nodelet" type="nodelet" name="plan_manage" args="manager" output="screen">
     <param name="num_worker_threads" value="16"/>
@@ -30,6 +30,7 @@
     <remap from="~land_triger" to="$(arg land_trigger_topic)"/>
     <remap from="~preempt" to="$(arg preempt_topic)"/>
     <remap from="~mode_trigger" to="$(arg mode_trigger_topic)"/>
+    <remap from="~cmd_owner" to="$(arg cmd_owner_topic)"/>
     <remap from="~tracker_session" to="$(arg tracker_session_topic)"/>
     <remap from="~takeover_ready" to="$(arg tracker_takeover_ready_topic)"/>
 

@@ -1,6 +1,7 @@
 
 #include <plan_manage/ego_replan_fsm.h>
 #include <cmath>
+#include <limits>
 
 #ifndef EGO_WARN
 #define EGO_WARN(fmt, ...) ROS_WARN("\033[32m[EGO]\033[0m " fmt, ##__VA_ARGS__)
@@ -28,9 +29,11 @@ namespace ego_planner
     have_tracker_heartbeat_ = false;
     tracker_replan_state_   = -2;
     tracker_mode_state_     = MODE_IDLE;
+    last_tracker_mode_state_ = ros::Time(0);
     tracker_takeover_ready_ = false;
     tracker_land_requested_ = false;
     tracker_takeover_ready_timeout_ = -1.0;
+    tracker_mode_exit_wait_timeout_ = 1.0;
     last_tracker_takeover_ready_ = ros::Time(0);
     cmd_owner_mode_ = MODE_IDLE;
     yaw_cmd_.des_yaw        = 0.0;
@@ -58,6 +61,7 @@ namespace ego_planner
     nh.param<std::string>("fsm/tracker_takeover_ready_topic", tracker_takeover_ready_topic_, std::string("/track/takeover_ready"));
     nh.param<std::string>("fsm/cmd_owner_topic", cmd_owner_topic_, std::string("/uav_planner/cmd_owner"));
     nh.param("fsm/tracker_takeover_ready_timeout", tracker_takeover_ready_timeout_, -1.0);
+    nh.param("fsm/tracker_mode_exit_wait_timeout", tracker_mode_exit_wait_timeout_, 1.0);
 
     nh.param("fsm/waypoint_num", waypoint_num_, -1);
     for (int i = 0; i < waypoint_num_; i++)
@@ -210,11 +214,25 @@ namespace ego_planner
         goto force_return;
       }
 
-      // tracker -> ego: wait until tracker explicitly reports it has exited
+      // tracker -> ego: wait until tracker explicitly reports it has exited.
+      // If mode_state is stale for too long, continue switching to avoid deadlock.
       if (planner_mode_ == MODE_EGO && tracker_mode_state_ == MODE_TRACKER)
       {
-        ROS_WARN_THROTTLE(1.0, "\033[32m[EGO]\033[0m Waiting tracker mode exit before enabling EGO.");
-        goto force_return;
+        const double state_age = last_tracker_mode_state_.isZero()
+                                     ? std::numeric_limits<double>::infinity()
+                                     : (ros::Time::now() - last_tracker_mode_state_).toSec();
+        if (tracker_mode_exit_wait_timeout_ <= 0.0 || state_age <= tracker_mode_exit_wait_timeout_)
+        {
+          ROS_WARN_THROTTLE(1.0,
+                            "\033[32m[EGO]\033[0m Waiting tracker mode exit before enabling EGO (state_age=%.2f).",
+                            state_age);
+          goto force_return;
+        }
+
+        ROS_WARN_THROTTLE(1.0,
+                          "\033[32m[EGO]\033[0m tracker mode_state stale (age=%.2f > %.2f), continue EGO switch.",
+                          state_age, tracker_mode_exit_wait_timeout_);
+        tracker_mode_state_ = MODE_IDLE;
       }
 
       active_mode_ = planner_mode_;
@@ -1616,6 +1634,7 @@ namespace ego_planner
   void EGOReplanFSM::trackerModeStateCallback(const std_msgs::Int32::ConstPtr &msg)
   {
     tracker_mode_state_ = msg->data;
+    last_tracker_mode_state_ = ros::Time::now();
   }
 
   void EGOReplanFSM::trackerTakeoverReadyCallback(const std_msgs::Bool::ConstPtr &msg)

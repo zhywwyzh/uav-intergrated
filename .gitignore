@@ -29,6 +29,7 @@ sdist/
 var/
 wheels/
 share/python-wheels/
+uav_venv/
 *.egg-info/
 .installed.cfg
 *.egg

@@ -94,7 +94,7 @@ def main():
     parser.set_defaults(fake_inputs=True)
 
     parser.add_argument("--yolo-topic", default="/target/odom")
-    parser.add_argument("--odom-topic", default="/track_ekf/ekf_odom")
+    parser.add_argument("--odom-topic", default="/drone_0_visual_slam/odom")
     parser.add_argument("--source-odom-topic", default="/unity_odom")
     parser.add_argument("--source-odom-timeout", type=float, default=10.0)
     parser.add_argument("--fallback-static-odom", dest="fallback_static_odom", action="store_true")

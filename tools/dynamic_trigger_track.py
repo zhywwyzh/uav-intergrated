@@ -5,9 +5,9 @@ Trigger track and publish a dynamic target odom trajectory.
 Default behavior:
 1) publish mode=2 to /uav_planner/trigger
 2) publish /tracker_trigger once
-3) keep refreshing mode=2 while publishing dynamic odom for 10s
-4) publish /target/odom and /track_ekf/ekf_odom for 10s
-5) target moves at 0.5 m/s along +45 deg in XY plane
+3) publish /target/odom and /track_ekf/ekf_odom for 10s
+4) target moves at 0.5 m/s along +45 deg in XY plane
+5) optional: refresh mode=2 during publish by --mode-refresh-rate
 """
 
 import argparse
@@ -50,6 +50,14 @@ class OdomCache:
 
     def callback(self, msg):
         self.latest = msg
+
+
+class Int32Cache:
+    def __init__(self):
+        self.latest = None
+
+    def callback(self, msg):
+        self.latest = int(msg.data)
 
 
 def topic_subscriber_count(topic_name):
@@ -124,12 +132,16 @@ def main():
         default=0.0,
         help="republish mode trigger during dynamic publishing; <=0 disables refresh",
     )
+    parser.add_argument("--mode-switch-topic", default="")
+    parser.add_argument("--exit-on-mode-switch", dest="exit_on_mode_switch", action="store_true")
+    parser.add_argument("--no-exit-on-mode-switch", dest="exit_on_mode_switch", action="store_false")
+    parser.set_defaults(exit_on_mode_switch=True)
     parser.add_argument("--trigger-topic", default="/tracker_trigger")
     parser.add_argument("--trigger-rate", type=float, default=5.0)
     parser.add_argument("--trigger-repeat", type=int, default=1)
 
     parser.add_argument("--target-topic", default="/target/odom")
-    parser.add_argument("--odom-topic", default="/track_ekf/ekf_odom")
+    parser.add_argument("--odom-topic", default="/drone_0_visual_slam/odom")
     parser.add_argument("--auto-resolve-odom-topic", dest="auto_resolve_odom_topic", action="store_true")
     parser.add_argument("--no-auto-resolve-odom-topic", dest="auto_resolve_odom_topic", action="store_false")
     parser.set_defaults(auto_resolve_odom_topic=False)
@@ -197,6 +209,10 @@ def main():
 
     odom_cache = OdomCache()
     rospy.Subscriber(args.source_odom_topic, Odometry, odom_cache.callback, queue_size=20)
+    mode_cache = Int32Cache()
+    mode_switch_topic = args.mode_switch_topic if args.mode_switch_topic else args.mode_topic
+    if args.exit_on_mode_switch:
+        rospy.Subscriber(mode_switch_topic, Int32, mode_cache.callback, queue_size=20)
     rospy.sleep(0.3)
 
     use_static_odom = False
@@ -278,6 +294,20 @@ def main():
     while not rospy.is_shutdown():
         t = rospy.Time.now().to_sec() - t0
         if t > duration:
+            break
+
+        if (
+            args.exit_on_mode_switch
+            and mode_cache.latest is not None
+            and int(mode_cache.latest) != int(args.mode_value)
+        ):
+            rospy.logwarn(
+                "%s Detected mode switch on %s: current=%d expected=%d, stop dynamic publishing.",
+                DYN_TRACK_TAG,
+                mode_switch_topic,
+                int(mode_cache.latest),
+                int(args.mode_value),
+            )
             break
 
         if mode_refresh_period is not None and (t - last_mode_refresh >= mode_refresh_period):

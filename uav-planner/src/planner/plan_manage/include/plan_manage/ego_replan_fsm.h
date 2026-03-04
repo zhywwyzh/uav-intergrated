@@ -132,9 +132,11 @@ namespace ego_planner
     bool have_tracker_heartbeat_;
     int tracker_replan_state_;
     int tracker_mode_state_;
+    ros::Time last_tracker_mode_state_;
     bool tracker_takeover_ready_;
     bool tracker_land_requested_;
     double tracker_heartbeat_timeout_;
+    double tracker_mode_exit_wait_timeout_;
     double tracker_takeover_ready_timeout_;
     ros::Time last_tracker_takeover_ready_;
     int cmd_owner_mode_;

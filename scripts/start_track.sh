@@ -35,7 +35,7 @@ cleanup() {
 trap cleanup SIGINT SIGTERM SIGQUIT
 
 YOLO_TOPIC="${YOLO_TOPIC:-/target/odom}"
-ODOM_TOPIC="${ODOM_TOPIC:-/track_ekf/ekf_odom}"
+ODOM_TOPIC="${ODOM_TOPIC:-/drone_0_visual_slam/odom}"
 LOCAL_MAP_TOPIC="${LOCAL_MAP_TOPIC:-/drone_0_ego_planner_node/grid_map/occupancy_inflate}"
 TRACK_TRIGGER_TOPIC="${TRACK_TRIGGER_TOPIC:-/tracker_trigger}"
 TRACK_PREEMPT_TOPIC="${TRACK_PREEMPT_TOPIC:-/tracker_preempt}"
