@@ -34,6 +34,7 @@ uav_venv/
 .installed.cfg
 *.egg
 MANIFEST
+beifen/
 
 samurai/
 

@@ -631,7 +631,7 @@ bool TrajOpt::grad_cost_p_tracking(const Eigen::Vector3d& p,
   double dr2 = dp.head(2).squaredNorm();
   double dz2 = dp.z() * dp.z();
 
-  bool ret;
+  bool ret = false;
   gradp.setZero();
   costp = 0;
 
@@ -672,7 +672,7 @@ bool TrajOpt::grad_cost_p_landing(const Eigen::Vector3d& p,
   double dr2 = dp.head(2).squaredNorm();
   double dz2 = dp.z() * dp.z();
 
-  bool ret;
+  bool ret = false;
   gradp.setZero();
   costp = 0;
 

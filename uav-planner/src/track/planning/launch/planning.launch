@@ -63,12 +63,18 @@
     <remap from="~heartbeat" to="heartbeat"/>
     <remap from="~preempt" to="$(arg preempt_topic)"/>
     <remap from="~tracker_session" to="$(arg tracker_session_topic)"/>
+    <remap from="~target" to="$(arg target_name_)"/>
     <param name="cmd_owner_topic" value="$(arg cmd_owner_topic)"/>
     <param name="owner_mode" value="2"/>
     <param name="strict_owner_gate" value="true"/>
     <param name="odom_topic" value="$(arg odom_topic)" type="string"/>
     <param name="cmd_period_sec" value="$(arg tracker_cmd_period_sec)" type="double"/>
     <param name="yaw_rate_max" value="$(arg tracker_yaw_rate_max)" type="double"/>
+    <param name="face_target_yaw" value="true" type="bool"/>
+    <param name="face_target_yaw_on_hover" value="true" type="bool"/>
+    <param name="target_topic" value="target" type="string"/>
+    <param name="target_lookahead_sec" value="0.03" type="double"/>
+    <param name="target_max_age_sec" value="0.3" type="double"/>
     <param name="time_forward" value="1.0" type="double"/>
   </node>
 </launch>

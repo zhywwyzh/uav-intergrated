@@ -1,5 +1,6 @@
 
 #include <plan_manage/ego_replan_fsm.h>
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -26,6 +27,7 @@ namespace ego_planner
     planner_mode_           = MODE_EGO;
     active_mode_            = MODE_IDLE;
     switch_latched_         = false;
+    switch_prepare_start_time_ = ros::Time(0);
     have_tracker_heartbeat_ = false;
     tracker_replan_state_   = -2;
     tracker_mode_state_     = MODE_IDLE;
@@ -34,6 +36,8 @@ namespace ego_planner
     tracker_land_requested_ = false;
     tracker_takeover_ready_timeout_ = -1.0;
     tracker_mode_exit_wait_timeout_ = 1.0;
+    switch_prepare_odom_wait_timeout_ = 1.0;
+    switch_prepare_odom_speed_threshold_ = 0.2;
     last_tracker_takeover_ready_ = ros::Time(0);
     cmd_owner_mode_ = MODE_IDLE;
     yaw_cmd_.des_yaw        = 0.0;
@@ -62,6 +66,8 @@ namespace ego_planner
     nh.param<std::string>("fsm/cmd_owner_topic", cmd_owner_topic_, std::string("/uav_planner/cmd_owner"));
     nh.param("fsm/tracker_takeover_ready_timeout", tracker_takeover_ready_timeout_, -1.0);
     nh.param("fsm/tracker_mode_exit_wait_timeout", tracker_mode_exit_wait_timeout_, 1.0);
+    nh.param("fsm/switch_prepare_odom_wait_timeout", switch_prepare_odom_wait_timeout_, 1.0);
+    nh.param("fsm/switch_prepare_odom_speed_threshold", switch_prepare_odom_speed_threshold_, 0.2);
 
     nh.param("fsm/waypoint_num", waypoint_num_, -1);
     for (int i = 0; i < waypoint_num_; i++)
@@ -171,7 +177,12 @@ namespace ego_planner
       mondifyInCollisionFinalGoal();
       checkCollision();
       planningReturnsChk();
-      evaluateEnvironmentDensity();
+      // Density evaluation can be expensive. During mode switch / first planning stage,
+      // skip it to avoid blocking the FSM loop and heartbeat feeding.
+      if (exec_state_ == EGO_EXEC_TRAJ || exec_state_ == EGO_REPLAN_TRAJ)
+      {
+        evaluateEnvironmentDensity();
+      }
     }
 
     static int fsm_num = 0;
@@ -199,6 +210,7 @@ namespace ego_planner
       if (!switch_latched_)
       {
         switch_latched_ = true;
+        switch_prepare_start_time_ = ros::Time::now();
         resetEgoTaskSession(false);
         tracker_land_requested_ = false;
         tracker_takeover_ready_ = false;
@@ -209,9 +221,24 @@ namespace ego_planner
         }
       }
 
-      if (have_odom_ && odom_vel_.norm() > 0.2)
+      if (have_odom_ && odom_vel_.norm() > switch_prepare_odom_speed_threshold_)
       {
-        goto force_return;
+        const double wait_sec = switch_prepare_start_time_.isZero()
+                                    ? std::numeric_limits<double>::infinity()
+                                    : (ros::Time::now() - switch_prepare_start_time_).toSec();
+        if (switch_prepare_odom_wait_timeout_ <= 0.0 || wait_sec <= switch_prepare_odom_wait_timeout_)
+        {
+          ROS_WARN_THROTTLE(
+              1.0,
+              "\033[32m[EGO]\033[0m Waiting odom speed settle in MODE_SWITCH_PREPARE: v=%.2f > %.2f (wait=%.2fs).",
+              odom_vel_.norm(), switch_prepare_odom_speed_threshold_, wait_sec);
+          goto force_return;
+        }
+
+        ROS_WARN_THROTTLE(
+            1.0,
+            "\033[32m[EGO]\033[0m Odom speed settle timeout in MODE_SWITCH_PREPARE: v=%.2f > %.2f (wait=%.2fs > %.2fs), continue switch.",
+            odom_vel_.norm(), switch_prepare_odom_speed_threshold_, wait_sec, switch_prepare_odom_wait_timeout_);
       }
 
       // tracker -> ego: wait until tracker explicitly reports it has exited.
@@ -943,8 +970,15 @@ namespace ego_planner
     const double end_chk_time = planner_manager_->pp_.speed_mode == PlanParameters::MODE::SLOW
                                     ? min(max(should_be_safe_dura, forward_look_time), traj->duration)
                                     : traj->duration;
-    const double t_step = map->cur_->getResolution() /
-                          ((traj->traj.getJuncPos(0) - traj->traj.getJuncPos(traj->traj.getPieceNum())).norm() / should_be_safe_dura) / 2;
+    const double traj_span = (traj->traj.getJuncPos(0) - traj->traj.getJuncPos(traj->traj.getPieceNum())).norm();
+    const double safe_dura = std::max(should_be_safe_dura, 1e-3);
+    const double traj_speed_ref = traj_span / safe_dura;
+    double t_step = map->cur_->getResolution() / std::max(traj_speed_ref, 1e-3) / 2.0;
+    if (!std::isfinite(t_step))
+    {
+      t_step = 0.03;
+    }
+    t_step = std::max(0.01, std::min(t_step, 0.10));
     int occ = 0;
     for (double t = t_cur; t <= end_chk_time && !dangerous && occ != GRID_MAP_OUTOFREGION_FLAG; t += t_step)
     {

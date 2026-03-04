@@ -126,6 +126,7 @@ namespace ego_planner
     int planner_mode_; // desired mode from trigger
     int active_mode_;  // currently active planning domain
     bool switch_latched_;
+    ros::Time switch_prepare_start_time_;
     ros::Time crash_rec_start_time_;
     ros::Time last_density_eval_time_{ros::Time(0)};
     ros::Time last_tracker_heartbeat_{ros::Time(0)};
@@ -138,6 +139,8 @@ namespace ego_planner
     double tracker_heartbeat_timeout_;
     double tracker_mode_exit_wait_timeout_;
     double tracker_takeover_ready_timeout_;
+    double switch_prepare_odom_wait_timeout_;
+    double switch_prepare_odom_speed_threshold_;
     ros::Time last_tracker_takeover_ready_;
     int cmd_owner_mode_;
     string mode_trigger_topic_, tracker_heartbeat_topic_, tracker_replan_state_topic_, tracker_land_trigger_topic_, tracker_mode_state_topic_;

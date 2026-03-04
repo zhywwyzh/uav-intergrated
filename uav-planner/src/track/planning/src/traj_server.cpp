@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cmath>
 #include <mutex>
+#include <Eigen/Core>
 #include <traj_opt/poly_traj_utils.hpp>
 
 #ifndef TRACK_WARN
@@ -38,6 +39,16 @@ std::atomic_bool need_yaw_resync_{true};
 std::mutex odom_yaw_mutex_;
 double odom_yaw_ = 0.0;
 ros::Time last_yaw_cmd_stamp_(0);
+std::atomic_bool face_target_yaw_{false};
+std::atomic_bool face_target_yaw_on_hover_{true};
+double target_lookahead_sec_ = 0.03;
+double target_max_age_sec_ = 0.3;
+std::string target_topic_ = "target";
+std::atomic_bool have_target_{false};
+std::mutex target_mutex_;
+Eigen::Vector3d target_pos_(Eigen::Vector3d::Zero());
+Eigen::Vector3d target_vel_(Eigen::Vector3d::Zero());
+ros::Time target_stamp_(0);
 
 void reset_runtime_state(bool clear_last_cmd) {
   receive_traj_ = false;
@@ -63,6 +74,23 @@ void odomCallback(const nav_msgs::OdometryConstPtr &msg) {
   have_odom_.store(true, std::memory_order_relaxed);
 }
 
+void targetCallback(const nav_msgs::OdometryConstPtr &msg) {
+  Eigen::Vector3d pos(msg->pose.pose.position.x,
+                      msg->pose.pose.position.y,
+                      msg->pose.pose.position.z);
+  Eigen::Vector3d vel(msg->twist.twist.linear.x,
+                      msg->twist.twist.linear.y,
+                      msg->twist.twist.linear.z);
+  const ros::Time stamp = msg->header.stamp.isZero() ? ros::Time::now() : msg->header.stamp;
+  {
+    std::lock_guard<std::mutex> lk(target_mutex_);
+    target_pos_ = pos;
+    target_vel_ = vel;
+    target_stamp_ = stamp;
+  }
+  have_target_.store(true, std::memory_order_relaxed);
+}
+
 bool try_get_odom_yaw(double &yaw) {
   if (!have_odom_.load(std::memory_order_relaxed)) {
     return false;
@@ -76,6 +104,37 @@ double wrap_pi(double a) {
   if (a >= M_PI) a -= 2.0 * M_PI;
   if (a <= -M_PI) a += 2.0 * M_PI;
   return a;
+}
+
+bool try_get_target_yaw(const Eigen::Vector3d &from_pos,
+                        const ros::Time &now,
+                        double &yaw) {
+  if (!face_target_yaw_.load(std::memory_order_relaxed) ||
+      !have_target_.load(std::memory_order_relaxed)) {
+    return false;
+  }
+  Eigen::Vector3d target_pos;
+  Eigen::Vector3d target_vel;
+  ros::Time target_stamp;
+  {
+    std::lock_guard<std::mutex> lk(target_mutex_);
+    target_pos = target_pos_;
+    target_vel = target_vel_;
+    target_stamp = target_stamp_;
+  }
+  if (target_max_age_sec_ > 0.0) {
+    const double age = (now - target_stamp).toSec();
+    if (age > target_max_age_sec_) {
+      return false;
+    }
+  }
+  const Eigen::Vector3d lookahead_target = target_pos + target_vel * std::max(0.0, target_lookahead_sec_);
+  Eigen::Vector2d dp = (lookahead_target - from_pos).head<2>();
+  if (dp.squaredNorm() < 1e-8) {
+    return false;
+  }
+  yaw = std::atan2(dp.y(), dp.x());
+  return true;
 }
 
 void publish_cmd(int traj_id,
@@ -135,7 +194,15 @@ bool exe_traj(const quadrotor_msgs::PolyTraj &trajMsg) {
       p.y() = trajMsg.hover_p[1];
       p.z() = trajMsg.hover_p[2];
       v0.setZero();
-      publish_cmd(trajMsg.traj_id, p, v0, v0, last_yaw_, 0);  // TODO yaw
+      double hover_yaw = last_yaw_;
+      if (face_target_yaw_on_hover_.load(std::memory_order_relaxed)) {
+        double target_yaw = 0.0;
+        if (try_get_target_yaw(p, now, target_yaw)) {
+          hover_yaw = target_yaw;
+        }
+      }
+      publish_cmd(trajMsg.traj_id, p, v0, v0, hover_yaw, 0);
+      last_yaw_ = hover_yaw;
       last_yaw_cmd_stamp_ = now;
       return true;
     }
@@ -172,6 +239,10 @@ bool exe_traj(const quadrotor_msgs::PolyTraj &trajMsg) {
     a = traj.getAcc(t);
     // NOTE yaw
     double yaw = trajMsg.yaw;
+    double target_yaw = 0.0;
+    if (try_get_target_yaw(p, now, target_yaw)) {
+      yaw = target_yaw;
+    }
     double d_yaw = wrap_pi(yaw - last_yaw_);
     double d_yaw_abs = fabs(d_yaw);
     const double yaw_step_max = yaw_rate_max_ > 0.0 ? yaw_rate_max_ * dt : 0.0;
@@ -273,6 +344,15 @@ int main(int argc, char **argv) {
   nh.param("cmd_period_sec", cmd_period_sec_, 0.01);
   nh.param("yaw_rate_max", yaw_rate_max_, 1.0);
   nh.param("odom_topic", odom_topic_, std::string("odom"));
+  bool face_target_yaw = false;
+  bool face_target_yaw_on_hover = true;
+  nh.param("face_target_yaw", face_target_yaw, false);
+  nh.param("face_target_yaw_on_hover", face_target_yaw_on_hover, true);
+  nh.param("target_topic", target_topic_, std::string("target"));
+  nh.param("target_lookahead_sec", target_lookahead_sec_, 0.03);
+  nh.param("target_max_age_sec", target_max_age_sec_, 0.3);
+  face_target_yaw_.store(face_target_yaw, std::memory_order_relaxed);
+  face_target_yaw_on_hover_.store(face_target_yaw_on_hover, std::memory_order_relaxed);
 
   ros::Subscriber poly_traj_sub = nh.subscribe("trajectory", 10, polyTrajCallback);
   ros::Subscriber heartbeat_sub = nh.subscribe("heartbeat", 10, heartbeatCallback);
@@ -280,6 +360,7 @@ int main(int argc, char **argv) {
   ros::Subscriber tracker_session_sub = nh.subscribe("tracker_session", 10, trackerSessionCallback);
   ros::Subscriber cmd_owner_sub = nh.subscribe(cmd_owner_topic, 10, cmdOwnerCallback);
   ros::Subscriber odom_sub = nh.subscribe(odom_topic_, 50, odomCallback);
+  ros::Subscriber target_sub = nh.subscribe(target_topic_, 50, targetCallback);
 
   pos_cmd_pub_ = nh.advertise<quadrotor_msgs::PositionCommand>("position_cmd", 50);
 

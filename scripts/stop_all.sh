@@ -138,10 +138,10 @@ run_stop_helper() {
 
 stop_mix_process
 
-echo "2) run integrated stop helpers"
-run_stop_helper "ego" "$PROJECT_ROOT/ego-planner/devel/setup.sh"
-run_stop_helper "track" "$PROJECT_ROOT/Elastic-Tracker/devel/setup.sh"
-run_stop_helper "perch" "$PROJECT_ROOT/Fast-Perching/devel/setup.sh"
+# echo "2) run integrated stop helpers"
+# run_stop_helper "ego" "$PROJECT_ROOT/ego-planner/devel/setup.sh"
+# run_stop_helper "track" "$PROJECT_ROOT/Elastic-Tracker/devel/setup.sh"
+# run_stop_helper "perch" "$PROJECT_ROOT/Fast-Perching/devel/setup.sh"
 
 echo "3) kill residual processes by pid files"
 kill_pid_file_if_alive "$MIX_PID_FILE" "mix.sh"

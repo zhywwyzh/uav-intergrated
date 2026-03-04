@@ -5,7 +5,7 @@ Trigger track and publish a dynamic target odom trajectory.
 Default behavior:
 1) publish mode=2 to /uav_planner/trigger
 2) publish /tracker_trigger once
-3) publish /target/odom and /track_ekf/ekf_odom for 10s
+3) publish /target/odom for 10s
 4) target moves at 0.5 m/s along +45 deg in XY plane
 5) optional: refresh mode=2 during publish by --mode-refresh-rate
 """
@@ -15,7 +15,6 @@ import copy
 import math
 
 import rospy
-from rosgraph import Master
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Int32
@@ -60,36 +59,6 @@ class Int32Cache:
         self.latest = int(msg.data)
 
 
-def topic_subscriber_count(topic_name):
-    try:
-        master = Master(rospy.get_name())
-        _, _, system_state = master.getSystemState()
-        # system_state: [publishers, subscribers, services]
-        subscribers = system_state[1] if len(system_state) > 1 else []
-        for topic, nodes in subscribers:
-            if topic == topic_name:
-                return len(nodes)
-    except Exception as exc:  # pylint: disable=broad-except
-        rospy.logwarn("Failed to query system state: %s", exc)
-    return 0
-
-
-def resolve_odom_topic(preferred_topic):
-    candidates = [preferred_topic, "/ekf/ekf_odom", "/track_ekf/ekf_odom"]
-    checked = []
-    for topic in candidates:
-        if topic in checked:
-            continue
-        checked.append(topic)
-        if topic_subscriber_count(topic) > 0:
-            return topic
-    return preferred_topic
-
-
-def log_odom_topic_state(topic_name, label):
-    rospy.loginfo("%s %s: %s (subscribers=%d)", DYN_TRACK_TAG, label, topic_name, topic_subscriber_count(topic_name))
-
-
 def build_trigger_msg():
     msg = PoseStamped()
     msg.header.stamp = rospy.Time.now()
@@ -113,14 +82,6 @@ def unit_velocity(direction, heading_deg):
     return math.cos(rad), math.sin(rad)
 
 
-def build_odom(base, frame_id):
-    msg = copy.deepcopy(base)
-    msg.header.stamp = rospy.Time.now()
-    if frame_id:
-        msg.header.frame_id = frame_id
-    return msg
-
-
 def main():
     parser = argparse.ArgumentParser(description="Trigger track with dynamic target odom")
     parser.add_argument("--mode-topic", default="/uav_planner/trigger")
@@ -132,7 +93,17 @@ def main():
         default=0.0,
         help="republish mode trigger during dynamic publishing; <=0 disables refresh",
     )
-    parser.add_argument("--mode-switch-topic", default="")
+    parser.add_argument(
+        "--mode-switch-topic",
+        default="/track/mode_state",
+        help="topic used to detect mode switch-away and stop publishing",
+    )
+    parser.add_argument(
+        "--mode-switch-grace-sec",
+        type=float,
+        default=1.0,
+        help="ignore mode-switch detection for initial N seconds after trigger",
+    )
     parser.add_argument("--exit-on-mode-switch", dest="exit_on_mode_switch", action="store_true")
     parser.add_argument("--no-exit-on-mode-switch", dest="exit_on_mode_switch", action="store_false")
     parser.set_defaults(exit_on_mode_switch=True)
@@ -141,10 +112,6 @@ def main():
     parser.add_argument("--trigger-repeat", type=int, default=1)
 
     parser.add_argument("--target-topic", default="/target/odom")
-    parser.add_argument("--odom-topic", default="/drone_0_visual_slam/odom")
-    parser.add_argument("--auto-resolve-odom-topic", dest="auto_resolve_odom_topic", action="store_true")
-    parser.add_argument("--no-auto-resolve-odom-topic", dest="auto_resolve_odom_topic", action="store_false")
-    parser.set_defaults(auto_resolve_odom_topic=False)
     parser.add_argument("--source-odom-topic", default="/unity_odom")
     parser.add_argument("--source-odom-timeout", type=float, default=10.0)
     parser.add_argument("--fallback-static-odom", dest="fallback_static_odom", action="store_true")
@@ -170,30 +137,11 @@ def main():
 
     rospy.init_node("dynamic_trigger_track", anonymous=True)
     rospy.loginfo("%s Trigger requested", DYN_TRACK_TAG)
-    requested_odom_topic = args.odom_topic
-    resolved_odom_topic = requested_odom_topic
-    if args.auto_resolve_odom_topic:
-        resolved_odom_topic = resolve_odom_topic(requested_odom_topic)
-        if resolved_odom_topic != requested_odom_topic:
-            rospy.logwarn(
-                "Switch odom publish topic from %s to %s (has active subscribers).",
-                requested_odom_topic,
-                resolved_odom_topic,
-            )
-            rospy.logwarn(
-                "Also mirroring odom to requested topic %s to avoid startup race.",
-                requested_odom_topic,
-            )
-    args.odom_topic = resolved_odom_topic
-    log_odom_topic_state(requested_odom_topic, "requested odom topic")
-    if requested_odom_topic != args.odom_topic:
-        log_odom_topic_state(args.odom_topic, "resolved odom topic")
 
     checks = [
         topic_type_compatible(args.mode_topic, "std_msgs/Int32"),
         topic_type_compatible(args.trigger_topic, "geometry_msgs/PoseStamped"),
         topic_type_compatible(args.target_topic, "nav_msgs/Odometry"),
-        topic_type_compatible(args.odom_topic, "nav_msgs/Odometry"),
     ]
     if not all(checks):
         rospy.logerr("Pre-check failed. Abort.")
@@ -202,10 +150,6 @@ def main():
     mode_pub = rospy.Publisher(args.mode_topic, Int32, queue_size=10)
     trigger_pub = rospy.Publisher(args.trigger_topic, PoseStamped, queue_size=10)
     target_pub = rospy.Publisher(args.target_topic, Odometry, queue_size=20)
-    odom_pub = rospy.Publisher(args.odom_topic, Odometry, queue_size=20)
-    odom_pub_requested = None
-    if requested_odom_topic != args.odom_topic:
-        odom_pub_requested = rospy.Publisher(requested_odom_topic, Odometry, queue_size=20)
 
     odom_cache = OdomCache()
     rospy.Subscriber(args.source_odom_topic, Odometry, odom_cache.callback, queue_size=20)
@@ -291,13 +235,33 @@ def main():
 
     t0 = rospy.Time.now().to_sec()
     duration = max(0.0, float(args.duration))
+    hold_logged = False
+    x_end = x0 + vx * duration
+    y_end = y0 + vy * duration
     while not rospy.is_shutdown():
         t = rospy.Time.now().to_sec() - t0
-        if t > duration:
-            break
+        in_hold_phase = t > duration
+        if in_hold_phase:
+            if not hold_logged:
+                rospy.loginfo(
+                    "%s Motion phase finished (%.2fs). Keep publishing fixed target point.",
+                    DYN_TRACK_TAG,
+                    duration,
+                )
+                hold_logged = True
+            target_x = x_end
+            target_y = y_end
+            target_vx = 0.0
+            target_vy = 0.0
+        else:
+            target_x = x0 + vx * t
+            target_y = y0 + vy * t
+            target_vx = vx
+            target_vy = vy
 
         if (
             args.exit_on_mode_switch
+            and t >= max(0.0, float(args.mode_switch_grace_sec))
             and mode_cache.latest is not None
             and int(mode_cache.latest) != int(args.mode_value)
         ):
@@ -315,25 +279,16 @@ def main():
             mode_pub.publish(mode_msg)
             last_mode_refresh = t
 
-        if use_static_odom:
-            odom_msg = copy.deepcopy(static_odom)
-        else:
-            odom_msg = copy.deepcopy(odom_cache.latest)
-        odom_msg = build_odom(odom_msg, args.frame_id)
-
         target_msg = Odometry()
         target_msg.header.stamp = rospy.Time.now()
         target_msg.header.frame_id = args.frame_id
-        target_msg.pose.pose.position.x = x0 + vx * t
-        target_msg.pose.pose.position.y = y0 + vy * t
+        target_msg.pose.pose.position.x = target_x
+        target_msg.pose.pose.position.y = target_y
         target_msg.pose.pose.position.z = z0
         target_msg.pose.pose.orientation.w = 1.0
-        target_msg.twist.twist.linear.x = vx
-        target_msg.twist.twist.linear.y = vy
+        target_msg.twist.twist.linear.x = target_vx
+        target_msg.twist.twist.linear.y = target_vy
 
-        odom_pub.publish(odom_msg)
-        if odom_pub_requested is not None:
-            odom_pub_requested.publish(odom_msg)
         target_pub.publish(target_msg)
         rate.sleep()
 

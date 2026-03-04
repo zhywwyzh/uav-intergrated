@@ -40,6 +40,24 @@ Eigen::IOFormat CommaInitFmt(Eigen::StreamPrecision, Eigen::DontAlignCols, ", ",
 inline double angle_diff(const double a, const double b) {
   return std::atan2(std::sin(a - b), std::cos(a - b));
 }
+inline Eigen::Vector3d project_point_to_tracking_ring_xy(const Eigen::Vector3d& center,
+                                                         const Eigen::Vector3d& raw_point,
+                                                         const Eigen::Vector3d& ref_point,
+                                                         const double radius) {
+  Eigen::Vector2d dir = (raw_point - center).head<2>();
+  if (dir.squaredNorm() < 1e-8) {
+    dir = (ref_point - center).head<2>();
+  }
+  if (dir.squaredNorm() < 1e-8) {
+    dir = Eigen::Vector2d(1.0, 0.0);
+  } else {
+    dir.normalize();
+  }
+  Eigen::Vector3d projected = raw_point;
+  projected.x() = center.x() + radius * dir.x();
+  projected.y() = center.y() + radius * dir.y();
+  return projected;
+}
 
 class Nodelet : public nodelet::Nodelet {
  private:
@@ -693,9 +711,13 @@ class Nodelet : public nodelet::Nodelet {
 
     // NOTE prediction
     std::vector<Eigen::Vector3d> target_predcit;
+    Eigen::Vector3d terminal_tracking_center = target_p;
     // ros::Time t_start = ros::Time::now();
     bool generate_new_traj_success = prePtr_->predict(target_p, target_v, target_predcit);
     if (generate_new_traj_success) {
+      if (!target_predcit.empty()) {
+        terminal_tracking_center = target_predcit.back();
+      }
       TRACK_STEP_THROTTLE(1.0, "S05 prediction success: horizon_pts=%zu", target_predcit.size());
     } else {
       TRACK_STEP_THROTTLE(1.0, "S05 prediction failed.");
@@ -783,6 +805,21 @@ class Nodelet : public nodelet::Nodelet {
         // ros::Time t_end2 = ros::Time::now();
         // t_path += (t_end2 - t_front2).toSec() * 1e3;
       }
+      if (!land_triger_received_ && !path.empty()) {
+        const double min_tracking_radius = std::max(0.0, tracking_dist_ - tolerance_d_);
+        const double path_end_radius = (path.back() - terminal_tracking_center).head<2>().norm();
+        if (path_end_radius < min_tracking_radius) {
+          const Eigen::Vector3d ref_point = path.size() > 1 ? path[path.size() - 2] : p_start;
+          const Eigen::Vector3d corrected_end = project_point_to_tracking_ring_xy(terminal_tracking_center,
+                                                                                   path.back(),
+                                                                                   ref_point,
+                                                                                   tracking_dist_);
+          TRACK_WARN("Path endpoint radius %.2f < %.2f, project to tracking ring (r=%.2f).",
+                     path_end_radius, min_tracking_radius, tracking_dist_);
+          path.back() = corrected_end;
+        }
+      }
+
       // NOTE corridor generating
       std::vector<Eigen::MatrixXd> hPolys;
       std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> keyPts;

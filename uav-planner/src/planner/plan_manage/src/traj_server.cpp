@@ -15,7 +15,7 @@ namespace ego_planner
     cmd_vis_pub_ = node_.advertise<visualization_msgs::Marker>("planning/position_cmd_vis", 10);
     
     node_.param("traj_server/time_forward", time_forward_, -1.0);
-    node_.param("traj_server/heartbeat_timeout", heartbeat_timeout_, 3.0);
+    node_.param("traj_server/heartbeat_timeout", heartbeat_timeout_, 8.0);
     node_.param<std::string>("traj_server/cmd_owner_topic", cmd_owner_topic_, std::string("/uav_planner/cmd_owner"));
     node_.param("traj_server/owner_mode", expected_owner_mode_, 1);
     node_.param("traj_server/strict_owner_gate", strict_owner_gate_, true);
