@@ -487,7 +487,7 @@ namespace ego_planner
 
     case EMERGENCY_STOP:
     {
-      cout << " SX" << flag_escape_emergency_ << "|" << enable_fail_safe_ << "|" << odom_vel_.norm() << flush;
+      // cout << " SX" << flag_escape_emergency_ << "|" << enable_fail_safe_ << "|" << odom_vel_.norm() << flush;
       if (flag_escape_emergency_) // Avoiding repeated calls
       {
         callEmergencyStop(odom_pos_);
@@ -512,6 +512,15 @@ namespace ego_planner
       if (flag_escape_emergency_) {
         callEmergencyStop(odom_pos_);
         flag_escape_emergency_ = false;
+      }
+
+      // Allow explicit mode switch requests to break out of COMMAND_STOP.
+      // MODE_SWITCH_PREPARE still checks odom speed and timeout before handover.
+      if (planner_mode_ != active_mode_) {
+        command_stop_ = false;
+        enable_fail_safe_ = true;
+        changeFSMExecState(MODE_SWITCH_PREPARE, "MODE_REQ@COMMAND_STOP");
+        break;
       }
 
       // 强制停：一直悬停，直到新目标
@@ -1629,6 +1638,7 @@ namespace ego_planner
     if (planner_mode_ == MODE_EGO)
     {
       command_stop_ = false;
+      enable_fail_safe_ = true;
       tracker_land_requested_ = false;
       tracker_takeover_ready_ = false;
       ROS_INFO("\033[32m[EGO]\033[0m Mode trigger=%d -> EGO planner requested.", trigger_mode);

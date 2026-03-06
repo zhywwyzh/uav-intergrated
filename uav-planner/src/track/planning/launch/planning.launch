@@ -13,7 +13,7 @@
   <arg name="cmd_owner_topic" default="/uav_planner/cmd_owner"/>
   <arg name="position_cmd_topic" default="position_cmd"/>
   <arg name="tracker_cmd_period_sec" default="0.01"/>
-  <arg name="tracker_yaw_rate_max" default="1.5"/>
+  <arg name="tracker_yaw_rate_max" default="0.8"/>
 
   <!-- <node pkg="nodelet" type="nodelet" name="plan_manage" args="manager" output="screen">
     <param name="num_worker_threads" value="16"/>
@@ -37,8 +37,8 @@
     <param name="plan_hz" value="20"/>
 
     <param name="K" value="8"/>
-    <param name="vmax" value="2.0"/>
-    <param name="amax" value="3.0"/>
+    <param name="vmax" value="1.0"/>
+    <param name="amax" value="2.0"/>
     <param name="rhoT" value="100.0"/>
     <param name="rhoP" value="10000.0"/>
     <param name="rhoV" value="1000.0"/>
